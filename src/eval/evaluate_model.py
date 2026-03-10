@@ -1,22 +1,23 @@
 import argparse
 import time
 from typing import List
-import furniture_bench
-from furniture_bench.envs.furniture_sim_env import FurnitureSimEnv
-from src.behavior.base import Actor  # noqa
-import torch
-from omegaconf import OmegaConf, DictConfig
-from src.eval.rollout import calculate_success_rate
-from src.behavior import get_actor
-from src.common.tasks import furniture2idx, task_timeout
-from src.common.files import trajectory_save_dir
-from src.gym import get_env
-from src.dataset import get_normalizer
 
-from ipdb import set_trace as bp  # noqa
+import furniture_bench
+import torch
 import wandb
+from furniture_bench.envs.furniture_sim_env import FurnitureSimEnv
+from ipdb import set_trace as bp  # noqa
+from omegaconf import DictConfig, OmegaConf
 from wandb import Api
 from wandb.sdk.wandb_run import Run
+
+from src.behavior import get_actor
+from src.behavior.base import Actor  # noqa
+from src.common.files import trajectory_save_dir
+from src.common.tasks import furniture2idx, task_timeout
+from src.dataset import get_normalizer
+from src.eval.rollout import calculate_success_rate
+from src.gym import get_env
 
 api = Api()
 
@@ -33,14 +34,8 @@ def validate_args(args: argparse.Namespace):
         == 1
     ), "Exactly one of run-id, sweep-id, project-id must be provided"
     assert args.run_state is None or all(
-        [
-            state in ["running", "finished", "failed", "crashed"]
-            for state in args.run_state
-        ]
-    ), (
-        "Invalid run-state: "
-        f"{args.run_state}. Valid options are: None, running, finished, failed, crashed"
-    )
+        [state in ["running", "finished", "failed", "crashed"] for state in args.run_state]
+    ), f"Invalid run-state: {args.run_state}. Valid options are: None, running, finished, failed, crashed"
 
     assert not args.leaderboard, "Leaderboard mode is not supported as of now"
     assert not args.store_video_wandb or args.wandb, "store-video-wandb requires wandb"
@@ -63,12 +58,7 @@ def get_runs(args: argparse.Namespace) -> List[Run]:
         runs = [run for run in runs if run.state in args.run_state]
 
     # Filter out runs based on action type
-    runs = [
-        run
-        for run in runs
-        if run.config.get("control", {}).get("control_mode", "delta")
-        == args.action_type
-    ]
+    runs = [run for run in runs if run.config.get("control", {}).get("control_mode", "delta") == args.action_type]
     return runs
 
 
@@ -76,9 +66,7 @@ def vision_encoder_field_hotfix(run, config):
     if isinstance(config.vision_encoder, str):
         # Read in the vision encoder config from the `vision_encoder` config group and set it
         OmegaConf.set_readonly(config, False)
-        config.vision_encoder = OmegaConf.load(
-            f"src/config/vision_encoder/{config.vision_encoder}.yaml"
-        )
+        config.vision_encoder = OmegaConf.load(f"src/config/vision_encoder/{config.vision_encoder}.yaml")
         OmegaConf.set_readonly(config, True)
 
         # Write it back to the run
@@ -164,9 +152,7 @@ if __name__ == "__main__":
     parser.add_argument("--visualize", action="store_true")
     parser.add_argument("--store-video-wandb", action="store_true")
     parser.add_argument("--eval-top-k", type=int, default=None)
-    parser.add_argument(
-        "--action-type", type=str, default="delta", choices=["delta", "pos"]
-    )
+    parser.add_argument("--action-type", type=str, default="delta", choices=["delta", "pos"])
     parser.add_argument("--prioritize-fewest-rollouts", action="store_true")
     parser.add_argument("--multitask", action="store_true")
     parser.add_argument("--compress-pickles", action="store_true")
@@ -236,10 +222,7 @@ if __name__ == "__main__":
                 run = api.run("/".join([run.project, run.id]))
 
                 # Check if the run is currently being evaluated
-                if (
-                    run.config.get("currently_evaluating", False)
-                    and not args.ignore_currently_evaluating_flag
-                ):
+                if run.config.get("currently_evaluating", False) and not args.ignore_currently_evaluating_flag:
                     print(f"Run: {run.name} is currently being evaluated, skipping")
                     continue
 
@@ -260,9 +243,7 @@ if __name__ == "__main__":
                     elif args.if_exists == "error":
                         raise ValueError(f"Run: {run.name} has already been evaluated")
                     elif args.if_exists == "overwrite":
-                        print(
-                            f"Run: {run.name} has already been evaluated, overwriting"
-                        )
+                        print(f"Run: {run.name} has already been evaluated, overwriting")
                         how_update = "overwrite"
                     elif args.if_exists == "append":
                         print(f"Run: {run.name} has already been evaluated, appending")
@@ -287,24 +268,18 @@ if __name__ == "__main__":
 
                 # If in overwrite set the currently_evaluating flag to true runs can cooperate better in skip mode
                 if args.wandb:
-                    print(
-                        f"Setting currently_evaluating flag to true for run: {run.name}"
-                    )
+                    print(f"Setting currently_evaluating flag to true for run: {run.name}")
                     run.config["currently_evaluating"] = True
                     run.update()
 
                 model_file = [f for f in run.files() if f.name.endswith(".pt")][0]
-                model_path = model_file.download(
-                    root=f"./models/{run.name}", exist_ok=True, replace=True
-                ).name
+                model_path = model_file.download(root=f"./models/{run.name}", exist_ok=True, replace=True).name
 
                 print(f"Model path: {model_path}")
 
                 # Get the current `test_epoch_loss` from the run
                 test_epoch_loss = run.summary.get("test_epoch_loss", None)
-                print(
-                    f"Evaluating run: {run.name} at test_epoch_loss: {test_epoch_loss}"
-                )
+                print(f"Evaluating run: {run.name} at test_epoch_loss: {test_epoch_loss}")
 
                 # Create the config object with the project name and make it read-only
                 config: DictConfig = OmegaConf.create(
@@ -335,9 +310,7 @@ if __name__ == "__main__":
                 print(OmegaConf.to_yaml(config))
 
                 # Make the actor
-                actor: Actor = get_actor(
-                    config=config, normalizer=normalizer, device=device
-                )
+                actor: Actor = get_actor(config=config, normalizer=normalizer, device=device)
 
                 # Load the model weights
                 state_dict = torch.load(model_path)
@@ -391,9 +364,7 @@ if __name__ == "__main__":
 
                 success_rate = rollout_stats.success_rate
 
-                print(
-                    f"Success rate: {success_rate:.2%} ({rollout_stats.n_success}/{rollout_stats.n_rollouts})"
-                )
+                print(f"Success rate: {success_rate:.2%} ({rollout_stats.n_success}/{rollout_stats.n_rollouts})")
 
                 if args.wandb:
                     print("Writing to wandb...")
@@ -406,32 +377,18 @@ if __name__ == "__main__":
                         s[spf + "n_success"] = rollout_stats.n_success
                         s[spf + "n_rollouts"] = rollout_stats.n_rollouts
                         s[spf + "total_return"] = rollout_stats.total_return
-                        s[spf + "average_return"] = (
-                            rollout_stats.total_return / rollout_stats.n_rollouts
-                        )
+                        s[spf + "average_return"] = rollout_stats.total_return / rollout_stats.n_rollouts
                         s[spf + "total_reward"] = rollout_stats.total_reward
-                        s[spf + "average_reward"] = (
-                            rollout_stats.total_reward / rollout_stats.n_rollouts
-                        )
+                        s[spf + "average_reward"] = rollout_stats.total_reward / rollout_stats.n_rollouts
                     elif how_update == "append":
                         s[spf + "n_success"] += rollout_stats.n_success
                         s[spf + "n_rollouts"] += rollout_stats.n_rollouts
-                        s[spf + "success_rate"] = (
-                            s[spf + "n_success"] / s[spf + "n_rollouts"]
-                        )
+                        s[spf + "success_rate"] = s[spf + "n_success"] / s[spf + "n_rollouts"]
 
-                        s[spf + "total_return"] = (
-                            s.get(spf + "total_return", 0) + rollout_stats.total_return
-                        )
-                        s[spf + "average_return"] = (
-                            s[spf + "total_return"] / s[spf + "n_rollouts"]
-                        )
-                        s[spf + "total_reward"] = (
-                            s.get(spf + "total_reward", 0) + rollout_stats.total_reward
-                        )
-                        s[spf + "average_reward"] = (
-                            s[spf + "total_reward"] / s[spf + "n_rollouts"]
-                        )
+                        s[spf + "total_return"] = s.get(spf + "total_return", 0) + rollout_stats.total_return
+                        s[spf + "average_return"] = s[spf + "total_return"] / s[spf + "n_rollouts"]
+                        s[spf + "total_reward"] = s.get(spf + "total_reward", 0) + rollout_stats.total_reward
+                        s[spf + "average_reward"] = s[spf + "total_reward"] / s[spf + "n_rollouts"]
                     else:
                         raise ValueError(f"Invalid how_update: {how_update}")
 
@@ -454,9 +411,7 @@ if __name__ == "__main__":
                 break
 
             # Sleep for the interval
-            print(
-                f"Sleeping for {args.continuous_interval} seconds before checking for new runs..."
-            )
+            print(f"Sleeping for {args.continuous_interval} seconds before checking for new runs...")
             time.sleep(args.continuous_interval)
     finally:
         # Unset the "currently_evaluating" flag

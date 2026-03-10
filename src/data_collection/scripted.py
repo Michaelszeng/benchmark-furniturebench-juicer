@@ -1,8 +1,13 @@
-import furniture_bench  # noqa: F401
 import argparse
+import os
 
-from src.data_collection.data_collector import DataCollector
+if "DATA_DIR_RAW" not in os.environ:
+    os.environ["DATA_DIR_RAW"] = "dataset"
+
+import furniture_bench  # noqa: F401
+
 from src.common.files import trajectory_save_dir
+from src.data_collection.data_collector import DataCollector
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

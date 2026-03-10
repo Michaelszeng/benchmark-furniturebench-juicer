@@ -1,18 +1,18 @@
 """Define data collection class that rollout the environment, get action from the interface (e.g., teleoperation, automatic scripts), and save data."""
+
+import gzip
 import lzma
-import time
 import pickle
+import time
 from datetime import datetime
 from pathlib import Path
-import gzip
 
 import gym
 import torch
-
-from furniture_bench.device.device_interface import DeviceInterface
 from furniture_bench.data.collect_enum import CollectEnum
-from furniture_bench.sim_config import sim_config
+from furniture_bench.device.device_interface import DeviceInterface
 from furniture_bench.envs.initialization_mode import Randomness
+from furniture_bench.sim_config import sim_config
 from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
 
 from src.data_processing.utils import resize, resize_crop
@@ -73,9 +73,7 @@ class DataCollector:
             self.env = gym.make(
                 "FurnitureSimFull-v0",
                 furniture=furniture,
-                max_env_steps=sim_config["scripted_timeout"][furniture]
-                if scripted
-                else 3000,
+                max_env_steps=sim_config["scripted_timeout"][furniture] if scripted else 3000,
                 headless=headless,
                 num_envs=1,  # Only support 1 for now.
                 manual_done=False if scripted else True,
@@ -132,6 +130,7 @@ class DataCollector:
 
         obs = self.reset()
         done = False
+        next_obs = None
 
         while self.num_success < self.num_demos:
             # Get an action.
@@ -167,9 +166,7 @@ class DataCollector:
                         elif k == "color_image1":
                             next_obs[k] = resize(next_obs[k]).squeeze().cpu().numpy()
                         elif k == "color_image2":
-                            next_obs[k] = (
-                                resize_crop(next_obs[k]).squeeze().cpu().numpy()
-                            )
+                            next_obs[k] = resize_crop(next_obs[k]).squeeze().cpu().numpy()
                         else:
                             next_obs[k] = v.squeeze().cpu().numpy()
 
@@ -211,9 +208,7 @@ class DataCollector:
 
             # Label reward.
             if collect_enum == CollectEnum.REWARD:
-                rew = self.env.furniture.manual_assemble_label(
-                    self.device_interface.rew_key
-                )
+                rew = self.env.furniture.manual_assemble_label(self.device_interface.rew_key)
                 if rew == 0:
                     # Correction the label.
                     self.rews[self.last_reward_idx] = 0
@@ -275,9 +270,7 @@ class DataCollector:
                 self.skills.append(skill_complete)
             obs = next_obs
 
-        print(
-            f"Collected {self.traj_counter} / {self.num_demos} successful trajectories!"
-        )
+        print(f"Collected {self.traj_counter} / {self.num_demos} successful trajectories!")
 
     def save_and_reset(self, collect_enum: CollectEnum, info):
         """Saves the collected data and reset the environment."""

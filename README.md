@@ -1,5 +1,12 @@
 # JUICER: Data-Efficient Imitation Learning for Robotic Assembly
 
+## Michael's Notes
+
+To run data collection (where `FURNITURE` in `['lamp', 'square_table', 'desk', 'drawer', 'cabinet', 'round_table', 'stool', 'chair', 'one_leg']`):
+```bash
+python src/data_collection/scripted.py -f "FURNITURE"
+```
+
 ## Installation Instructions
 
 
@@ -46,7 +53,9 @@ Once installed and activated, make some compatibility changes to the environment
 
 ```bash
 pip install setuptools==65.5.0
-pip install --upgrade pip wheel==0.38.4
+# IMPORTANT: Keep pip < 24.1 because `gym==0.21.0` (required by `furniture-bench`)
+# has metadata that newer pip versions reject.
+pip install "pip==24.0" wheel==0.38.4
 pip install termcolor
 ```
 
@@ -75,7 +84,7 @@ pip install -e python --no-cache-dir --force-reinstall
 
 _Note: The `--no-cache-dir` and `--force-reinstall` flags are used to avoid potential issues with the installation we encountered._
 
-_Note: Please ignore Pip's notice that `[notice] To update, run: pip install --upgrade pip` as the current version of Pip is necessary for compatibility with the codebase._
+_Note: Please ignore Pip's notice that `[notice] To update, run: pip install --upgrade pip`. This codebase depends on `furniture-bench`, which pins `gym==0.21.0`, and that package requires `pip<24.1` due to legacy metadata._
 
 _Tip: The documentation for IsaacGym  is located inside the `docs` directory in the unzipped folder and is not available online. You can open the `index.html` file in your browser to access the documentation._
 
@@ -110,7 +119,23 @@ This should open a window with the simulated environment and the robot in it.
 If you encounter the error `ImportError: libpython3.8.so.1.0: cannot open shared object file: No such file or directory`, this might be remedied by adding the conda environment's library path to the `LD_LIBRARY_PATH` environment variable. This can be done by, e.g., running:
 
 ```bash
-export LD_LIBRARY_PATH=YOUR_CONDA_PATH/envs/YOUR_CONDA_ENV_NAME/lib
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+```
+
+To make this persistent (recommended), add a conda activation hook:
+
+```bash
+mkdir -p "$CONDA_PREFIX/etc/conda/activate.d" "$CONDA_PREFIX/etc/conda/deactivate.d"
+
+cat > "$CONDA_PREFIX/etc/conda/activate.d/isaacgym.sh" <<'EOF'
+export _JUICER_OLD_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+EOF
+
+cat > "$CONDA_PREFIX/etc/conda/deactivate.d/isaacgym.sh" <<'EOF'
+export LD_LIBRARY_PATH="${_JUICER_OLD_LD_LIBRARY_PATH:-}"
+unset _JUICER_OLD_LD_LIBRARY_PATH
+EOF
 ```
 
 ### Install the ImitationJuicer Package
@@ -142,8 +167,9 @@ sudo systemctl start spacenavd
 Depending on what parts of the codebase you want to run, you may need to install additional dependencies. Especially different vision encoders might require additional dependencies. To install the R3M or VIP encoder, respectively, run:
 
 ```bash
-pip install -e imitation-juicer/furniture-bench/r3m
-pip install -e imitation-juicer/furniture-bench/vip
+# Run from the repository root.
+pip install -e furniture-bench/r3m
+pip install -e furniture-bench/vip
 ```
 
 The Spatial Softmax encoder and BC_RNN policy requires the `robomimic` package to be installed:

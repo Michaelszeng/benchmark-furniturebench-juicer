@@ -22,13 +22,17 @@ source ~/.bashrc
 
 # Create conda environment
 conda create -n rlgpu python=3.8 -y
-# some manual fixes
-pip install setuptools==65.5.0
-pip install --upgrade pip wheel==0.38.4
-
-
 # Activate conda environment
 conda activate rlgpu
+
+# some manual fixes
+pip install setuptools==65.5.0
+# IMPORTANT: Keep pip < 24.1 because `gym==0.21.0` (required by `furniture-bench`)
+# has metadata that newer pip versions reject.
+pip install "pip==24.0" wheel==0.38.4
+
+# IsaacGym bindings need to find libpython inside the conda env.
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 
 # Install dependencies
 # isaac gym (fresh)

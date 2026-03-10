@@ -1,38 +1,36 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from src.common.context import suppress_stdout
 
+from src.common.context import suppress_stdout
 
 with suppress_stdout():
     import furniture_bench
 
+import hydra
 import numpy as np
 import torch
 import wandb
 from diffusers.optimization import get_scheduler
+from ipdb import set_trace as bp
+from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import DataLoader, random_split
+from tqdm import tqdm, trange
+from wandb_osh.hooks import TriggerWandbSyncHook
+
+from gym import logger
+from src.behavior import get_actor
+from src.common.earlystop import EarlyStopper
+from src.common.files import get_processed_paths
+from src.common.pytorch_util import dict_to_device
+from src.dataset import get_normalizer
+from src.dataset.dataloader import FixedStepsDataloader
 from src.dataset.dataset import (
     FurnitureImageDataset,
 )
-from src.dataset import get_normalizer
+from src.dataset.normalizer import Normalizer
 from src.eval.rollout import do_rollout_evaluation
 from src.gym import get_env
-from tqdm import tqdm, trange
-from ipdb import set_trace as bp
-from src.behavior import get_actor
-from src.dataset.dataloader import FixedStepsDataloader
-from src.dataset.normalizer import Normalizer
-from src.common.pytorch_util import dict_to_device
-from torch.utils.data import random_split, DataLoader
-from src.common.earlystop import EarlyStopper
-from src.common.files import get_processed_paths
-
-from gym import logger
-
-import hydra
-from omegaconf import DictConfig, OmegaConf
-
-from wandb_osh.hooks import TriggerWandbSyncHook
 
 trigger_sync = TriggerWandbSyncHook()
 
@@ -74,9 +72,7 @@ def main(config: DictConfig):
     OmegaConf.resolve(config)
     print(OmegaConf.to_yaml(config))
     env = None
-    device = torch.device(
-        f"cuda:{config.training.gpu_id}" if torch.cuda.is_available() else "cpu"
-    )
+    device = torch.device(f"cuda:{config.training.gpu_id}" if torch.cuda.is_available() else "cpu")
 
     data_path = get_processed_paths(
         environment=to_native(config.data.environment),
@@ -86,9 +82,7 @@ def main(config: DictConfig):
         demo_outcome=to_native(config.data.demo_outcome),
     )
 
-    normalizer: Normalizer = get_normalizer(
-        config.data.normalization, config.control.control_mode
-    )
+    normalizer: Normalizer = get_normalizer(config.data.normalization, config.control.control_mode)
 
     print(f"Using data from {data_path}")
 
@@ -139,11 +133,7 @@ def main(config: DictConfig):
     if config.training.load_checkpoint_run_id is not None:
         api = wandb.Api()
         run = api.run(config.training.load_checkpoint_run_id)
-        model_path = (
-            [f for f in run.files() if f.name.endswith(".pt")][0]
-            .download(exist_ok=True)
-            .name
-        )
+        model_path = [f for f in run.files() if f.name.endswith(".pt")][0].download(exist_ok=True).name
         print(f"Loading checkpoint from {config.training.load_checkpoint_run_id}")
         actor.load_state_dict(torch.load(model_path))
 
@@ -211,12 +201,8 @@ def main(config: DictConfig):
         {
             "num_samples_train": len(train_dataset),
             "num_samples_test": len(test_dataset),
-            "num_episodes_train": int(
-                len(dataset.episode_ends) * (1 - config.data.test_split)
-            ),
-            "num_episodes_test": int(
-                len(dataset.episode_ends) * config.data.test_split
-            ),
+            "num_episodes_train": int(len(dataset.episode_ends) * (1 - config.data.test_split)),
+            "num_episodes_test": int(len(dataset.episode_ends) * config.data.test_split),
             "dataset_metadata": dataset.metadata,
         }
     )
@@ -310,7 +296,7 @@ def main(config: DictConfig):
         # Save the model if the test loss is the best so far
         if config.training.checkpoint_model and test_loss_mean < best_test_loss:
             best_test_loss = test_loss_mean
-            save_path = str(model_save_dir / f"actor_chkpt_best_test_loss.pt")
+            save_path = str(model_save_dir / "actor_chkpt_best_test_loss.pt")
             torch.save(
                 actor.state_dict(),
                 save_path,

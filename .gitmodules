@@ -1,3 +1,4 @@
 [submodule "furniture-bench"]
 	path = furniture-bench
-	url = git@github.com:ankile/furniture-bench.git
+	url = git@github.com:Michaelszeng/furniture-bench.git
+	branch = iros-2024-release-v1

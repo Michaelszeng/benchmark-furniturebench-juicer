@@ -1,21 +1,21 @@
+import argparse
+from typing import List, Union
+
+import cv2
 import numpy as np
 import torch
-from tqdm import trange
 import zarr
-from typing import Union, List
+from ipdb import set_trace as bp
+from tqdm import trange
 
-from src.dataset.normalizer import Normalizer
-from src.dataset.zarr import combine_zarr_datasets
 from src.common.control import ControlMode
-
 from src.common.tasks import furniture2idx
 from src.common.vision import (
     FrontCameraTransform,
     WristCameraTransform,
 )
-
-
-from ipdb import set_trace as bp
+from src.dataset.normalizer import Normalizer
+from src.dataset.zarr import combine_zarr_datasets
 
 
 def create_sample_indices(
@@ -43,9 +43,7 @@ def create_sample_indices(
             end_offset = (idx + sequence_length + start_idx) - buffer_end_idx
             sample_start_idx = 0 + start_offset
             sample_end_idx = sequence_length - end_offset
-            indices.append(
-                [buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx, i]
-            )
+            indices.append([buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx, i])
     indices = np.array(indices)
     return indices
 
@@ -63,9 +61,7 @@ def sample_sequence(
         sample = input_arr[buffer_start_idx:buffer_end_idx]
         data = sample
         if (sample_start_idx > 0) or (sample_end_idx < sequence_length):
-            data = np.zeros(
-                shape=(sequence_length,) + input_arr.shape[1:], dtype=input_arr.dtype
-            )
+            data = np.zeros(shape=(sequence_length,) + input_arr.shape[1:], dtype=input_arr.dtype)
             if sample_start_idx > 0:
                 data[:sample_start_idx] = sample[0]
             if sample_end_idx < sequence_length:
@@ -117,9 +113,7 @@ class FurnitureImageDataset(torch.utils.data.Dataset):
         self.metadata = metadata
         print(f"Loading dataset of {len(self.episode_ends)} episodes:")
         for path, data in metadata.items():
-            print(
-                f"  {path}: {data['n_episodes_used']} episodes, {data['n_frames_used']}"
-            )
+            print(f"  {path}: {data['n_episodes_used']} episodes, {data['n_frames_used']}")
 
         self.train_data = {
             "color_image1": combined_data["color_image1"],
@@ -143,16 +137,10 @@ class FurnitureImageDataset(torch.utils.data.Dataset):
 
         # Add image augmentation
         self.augment_image = augment_image
-        self.image1_transform = WristCameraTransform(
-            mode="train" if augment_image else "eval"
-        )
-        self.image2_transform = FrontCameraTransform(
-            mode="train" if augment_image else "eval"
-        )
+        self.image1_transform = WristCameraTransform(mode="train" if augment_image else "eval")
+        self.image2_transform = FrontCameraTransform(mode="train" if augment_image else "eval")
 
-        self.task_idxs = np.array(
-            [furniture2idx[f] for f in combined_data["furniture"]]
-        )
+        self.task_idxs = np.array([furniture2idx[f] for f in combined_data["furniture"]])
         self.successes = combined_data["success"].astype(np.uint8)
         self.skills = combined_data["skill"].astype(np.uint8)
         self.failure_idx = combined_data["failure_idx"]
@@ -200,27 +188,17 @@ class FurnitureImageDataset(torch.utils.data.Dataset):
         # Discard unused observations
         nsample["color_image1"] = nsample["color_image1"][: self.obs_horizon, :]
         nsample["color_image2"] = nsample["color_image2"][: self.obs_horizon, :]
-        nsample["robot_state"] = torch.from_numpy(
-            nsample["robot_state"][: self.obs_horizon, :]
-        )
+        nsample["robot_state"] = torch.from_numpy(nsample["robot_state"][: self.obs_horizon, :])
 
         # Discard unused actions
-        nsample["action"] = torch.from_numpy(
-            nsample["action"][self.first_action_idx : self.final_action_idx, :]
-        )
+        nsample["action"] = torch.from_numpy(nsample["action"][self.first_action_idx : self.final_action_idx, :])
 
         # Apply the image augmentation
         nsample["color_image1"] = torch.stack(
-            [
-                self.image1_transform(img)
-                for img in torch.from_numpy(nsample["color_image1"]).permute(0, 3, 1, 2)
-            ]
+            [self.image1_transform(img) for img in torch.from_numpy(nsample["color_image1"]).permute(0, 3, 1, 2)]
         ).permute(0, 2, 3, 1)
         nsample["color_image2"] = torch.stack(
-            [
-                self.image2_transform(img)
-                for img in torch.from_numpy(nsample["color_image2"]).permute(0, 3, 1, 2)
-            ]
+            [self.image2_transform(img) for img in torch.from_numpy(nsample["color_image2"]).permute(0, 3, 1, 2)]
         ).permute(0, 2, 3, 1)
 
         # Add the task index and success flag to the sample
@@ -291,9 +269,7 @@ class FurnitureFeatureDataset(torch.utils.data.Dataset):
             pad_after=action_horizon - 1,
         )
 
-        self.task_idxs = np.array(
-            [furniture2idx[f] for f in combined_data["furniture"]]
-        )
+        self.task_idxs = np.array([furniture2idx[f] for f in combined_data["furniture"]])
         self.successes = combined_data["success"].astype(np.uint8)
 
         normalizer: Normalizer = normalizer.cpu()
@@ -349,9 +325,7 @@ class FurnitureFeatureDataset(torch.utils.data.Dataset):
         nsample["robot_state"] = nsample["robot_state"][: self.obs_horizon, :]
 
         # Discard unused actions
-        nsample["action"] = nsample["action"][
-            self.first_action_idx : self.final_action_idx, :
-        ]
+        nsample["action"] = nsample["action"][self.first_action_idx : self.final_action_idx, :]
 
         # Add the task index and success flag to the sample
         nsample["task_idx"] = self.task_idxs[demo_idx]
@@ -383,12 +357,8 @@ class OfflineRLFeatureDataset(FurnitureFeatureDataset):
         super().__init__(*args, **kwargs)
 
         # Also add in rewards and terminal states to the dataset
-        self.normalized_train_data["reward"] = self.dataset["reward"][
-            : self.episode_ends[-1]
-        ]
-        self.normalized_train_data["terminal"] = self.dataset["terminal"][
-            : self.episode_ends[-1]
-        ]
+        self.normalized_train_data["reward"] = self.dataset["reward"][: self.episode_ends[-1]]
+        self.normalized_train_data["terminal"] = self.dataset["terminal"][: self.episode_ends[-1]]
 
     def __getitem__(self, idx):
         # Get the start/end indices for this datapoint
@@ -446,3 +416,109 @@ class OfflineRLFeatureDataset(FurnitureFeatureDataset):
         output["reward"] = nsample["reward"][start_idx:end_idx].sum()
 
         return output
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Interactively view episodes from a processed zarr dataset.")
+    parser.add_argument("zarr_path", help="Path to the .zarr dataset file")
+    parser.add_argument(
+        "--episode",
+        "-e",
+        type=int,
+        default=0,
+        help="Episode index to start at (default: 0)",
+    )
+    parser.add_argument("--fps", type=int, default=10, help="Playback speed in frames per second (default: 10)")
+    args = parser.parse_args()
+
+    # src/dataset/zarr.py shadows the installed zarr package when this file is
+    # run as a script (Python inserts the script's directory first on sys.path).
+    # We must evict the cached local module and re-import with sys.path pruned.
+    import importlib
+    import sys
+    from pathlib import Path as _Path
+
+    _script_dir = str(_Path(__file__).parent.resolve())
+    _saved_path = sys.path[:]
+    sys.path = [p for p in sys.path if _Path(p).resolve() != _Path(_script_dir).resolve()]
+    del sys.modules["zarr"]
+    zarr_lib = importlib.import_module("zarr")
+    sys.path = _saved_path
+
+    dataset = zarr_lib.open(args.zarr_path, mode="r")
+    episode_ends = dataset["episode_ends"][:]
+    n_episodes = len(episode_ends)
+
+    print(f"Dataset: {args.zarr_path}")
+    print(f"Episodes: {n_episodes}  |  Total frames: {episode_ends[-1]}")
+    print()
+    print("Controls:")
+    print("  k / l     step 1 / 10 frames forward")
+    print("  j / h     step 1 / 10 frames backward")
+    print("  n / p     next / previous episode")
+    print("  Space     toggle play/pause")
+    print("  q         quit")
+    print()
+
+    ep_idx = max(0, min(args.episode, n_episodes - 1))
+    frame_delay_ms = max(1, 1000 // args.fps)
+    playing = False
+
+    cv2.namedWindow("Dataset Viewer", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Dataset Viewer", 1280, 480)
+
+    def load_episode_frames(ep):
+        start = 0 if ep == 0 else episode_ends[ep - 1]
+        end = episode_ends[ep]
+        imgs1 = dataset["color_image1"][start:end]  # (T, H, W, 3)
+        imgs2 = dataset["color_image2"][start:end]
+        success = bool(dataset["success"][ep])
+        return np.concatenate([imgs1, imgs2], axis=2), success
+
+    frames, success = load_episode_frames(ep_idx)
+    frame_idx = 0
+
+    while True:
+        frame = frames[frame_idx]
+        # OpenCV expects BGR; zarr images are stored as RGB
+        display = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+        label = (
+            f"Ep {ep_idx}/{n_episodes - 1}  |  "
+            f"Frame {frame_idx}/{len(frames) - 1}  |  "
+            f"{'SUCCESS' if success else 'FAILURE'}"
+        )
+        cv2.putText(display, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.imshow("Dataset Viewer", display)
+
+        wait_ms = frame_delay_ms if playing else 0
+        key = cv2.waitKey(wait_ms) & 0xFF
+
+        if key == ord("q"):
+            break
+        elif key == ord(" "):
+            playing = not playing
+        elif key == ord("k") or (playing and key == 255):
+            # advance one frame (also used during auto-play)
+            if frame_idx < len(frames) - 1:
+                frame_idx += 1
+            else:
+                playing = False
+        elif key == ord("l"):
+            frame_idx = min(frame_idx + 10, len(frames) - 1)
+        elif key == ord("j"):
+            frame_idx = max(frame_idx - 1, 0)
+        elif key == ord("h"):
+            frame_idx = max(frame_idx - 10, 0)
+        elif key == ord("n"):
+            ep_idx = min(ep_idx + 1, n_episodes - 1)
+            frames, success = load_episode_frames(ep_idx)
+            frame_idx = 0
+            playing = False
+        elif key == ord("p"):
+            ep_idx = max(ep_idx - 1, 0)
+            frames, success = load_episode_frames(ep_idx)
+            frame_idx = 0
+            playing = False
+
+    cv2.destroyAllWindows()

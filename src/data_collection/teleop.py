@@ -1,19 +1,25 @@
 import argparse
+import os
+
+if "DATA_DIR_RAW" not in os.environ:
+    os.environ["DATA_DIR_RAW"] = "dataset"
+
 import random
 
 import furniture_bench
-from furniture_bench.device import make_device
 from furniture_bench.config import config
+from furniture_bench.device import make_device
 
+from src.common.files import trajectory_save_dir
 from src.data_collection.data_collector_sm import DataCollectorSpaceMouse
 from src.data_collection.keyboard_interface import KeyboardInterface
-from src.common.files import trajectory_save_dir
 
 
 def main():
     parser = argparse.ArgumentParser(description="Collect IL data")
     parser.add_argument(
         "--furniture",
+        "-f",
         help="Name of the furniture",
         choices=list(config["furniture"].keys()),
         required=True,

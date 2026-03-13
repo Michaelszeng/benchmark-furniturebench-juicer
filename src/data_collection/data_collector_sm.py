@@ -12,7 +12,22 @@ import numpy as np
 import scipy.spatial.transform as st
 import torch
 from furniture_bench.device.device_interface import DeviceInterface
-from furniture_bench.device.spacemouse.spacemouse_shared_memory import Spacemouse
+try:
+    from furniture_bench.device.spacemouse.spacemouse_shared_memory import Spacemouse
+except (ImportError, AttributeError):
+    print("Could not import Spacemouse, using dummy. This is expected if you are not using a SpaceMouse.")
+    class Spacemouse:
+        def __init__(self, shm_manager=None, deadzone=None):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+        def get_motion_state_transformed(self):
+            return np.zeros(6)
+        def is_button_pressed(self, button_id):
+            return False
+
 from furniture_bench.envs.initialization_mode import Randomness
 from furniture_bench.sim_config import sim_config
 from furniture_bench.utils.scripted_demo_mod import scale_scripted_action

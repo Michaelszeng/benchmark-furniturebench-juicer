@@ -1,31 +1,59 @@
+"""
+Convert raw trajectory pickle files into a processed zarr dataset.
+
+Reads .pkl / .pkl.gz / .pkl.xz files from:
+    $DATA_DIR_RAW/raw/{env}/{task}/{source}/{randomness}/
+
+Applies the following transforms to each trajectory:
+  - Converts quaternion to 6D rotation representation
+  - Converts delta actions from quaternion to 6D rotation
+  - Clips z-axis rotation deltas to ±0.35 and xyz position deltas to ±0.025
+  - Computes absolute end-effector position actions from robot state + delta
+
+Writes a zarr store to:
+    $DATA_DIR_PROCESSED/processed/{env}/{task}/{source}/{randomness}/{outcome}.zarr
+
+Usage:
+    python -m src.data_processing.process_pickles \\
+        --env sim --furniture one_leg --source scripted \\
+        --randomness low --demo-outcome success [--overwrite] [--n-cpus 8]
+"""
+
 import argparse
 import array
 import os
-from pathlib import Path
+
+if "DATA_DIR_RAW" not in os.environ:
+    os.environ["DATA_DIR_RAW"] = "dataset"
+
+if "DATA_DIR_PROCESSED" not in os.environ:
+    os.environ["DATA_DIR_PROCESSED"] = "dataset"
+
+import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-import random
+from pathlib import Path
 from typing import List
 
 import numpy as np
 import torch
 import zarr
 from furniture_bench.robot.robot_state import filter_and_concat_robot_state
-from numcodecs import Blosc, JSON
-from tqdm import tqdm, trange
-from src.common.types import Trajectory
-from src.common.files import get_processed_path, get_raw_paths
-from src.visualization.render_mp4 import unpickle_data
-from src.common.geometry import (
-    np_proprioceptive_quat_to_6d_rotation,
-    np_action_quat_to_6d_rotation,
-    np_extract_ee_pose_6d,
-    np_apply_quat,
-    np_action_6d_to_quat,
-)
-from src.data_processing.utils import clip_axis_rotation
-
 from ipdb import set_trace as bp  # noqa
+from numcodecs import JSON, Blosc
+from tqdm import tqdm, trange
+
+from src.common.files import get_processed_path, get_raw_paths
+from src.common.geometry import (
+    np_action_6d_to_quat,
+    np_action_quat_to_6d_rotation,
+    np_apply_quat,
+    np_extract_ee_pose_6d,
+    np_proprioceptive_quat_to_6d_rotation,
+)
+from src.common.types import Trajectory
+from src.data_processing.utils import clip_axis_rotation
+from src.visualization.render_mp4 import unpickle_data
 
 
 # === Modified Function to Initialize Zarr Store with Full Dimensions ===
@@ -59,9 +87,7 @@ def initialize_zarr_store(out_path, full_data_shapes, chunksize=32):
                 object_codec=JSON(),
             )
         else:
-            z.create_dataset(
-                name, shape=shape, dtype=dtype, chunks=(chunksize,) + shape[1:]
-            )
+            z.create_dataset(name, shape=shape, dtype=dtype, chunks=(chunksize,) + shape[1:])
 
     return z
 
@@ -88,9 +114,7 @@ def process_pickle_file(
             dtype=np.float32,
         )
     else:
-        all_robot_state_quat = np.array(
-            [o["robot_state"] for o in obs], dtype=np.float32
-        )
+        all_robot_state_quat = np.array([o["robot_state"] for o in obs], dtype=np.float32)
 
     all_robot_state_6d = np_proprioceptive_quat_to_6d_rotation(all_robot_state_quat)
 
@@ -107,9 +131,7 @@ def process_pickle_file(
         action_delta_6d = action_delta
         action_delta_quat = np_action_6d_to_quat(action_delta_6d)
     else:
-        raise ValueError(
-            f"Unexpected action shape: {action_delta.shape}. Expected (N, 8) or (N, 10)"
-        )
+        raise ValueError(f"Unexpected action shape: {action_delta.shape}. Expected (N, 8) or (N, 10)")
 
     # TODO: Make sure this is rectified in the controller-end and
     # figure out what to do with the corrupted raw data
@@ -124,9 +146,7 @@ def process_pickle_file(
         action_pos = np.concatenate(
             [
                 all_robot_state_quat[:-1, :3] + action_delta_quat[:, :3],
-                np_apply_quat(
-                    all_robot_state_quat[:-1, 3:7], action_delta_quat[:, 3:7]
-                ),
+                np_apply_quat(all_robot_state_quat[:-1, 3:7], action_delta_quat[:, 3:7]),
                 # Append the gripper action
                 action_delta_quat[:, -1:],
             ],
@@ -142,19 +162,13 @@ def process_pickle_file(
 
     # Extract the rewards, skills, and parts_poses from the pickle file
     reward = np.array(data["rewards"], dtype=np.float32)
-    skill = (
-        np.array(data["skills"], dtype=np.float32)
-        if "skills" in data
-        else np.zeros_like(reward)
-    )
-    augment_states = (
-        data["augment_states"] if "augment_states" in data else np.zeros_like(reward)
-    )
+    skill = np.array(data["skills"], dtype=np.float32) if "skills" in data else np.zeros_like(reward)
+    augment_states = data["augment_states"] if "augment_states" in data else np.zeros_like(reward)
 
     # Sanity check that all arrays are the same length
-    assert len(robot_state_6d) == len(
-        action_delta_6d
-    ), f"Mismatch in {pickle_path}, lengths differ by {len(robot_state_6d) - len(action_delta_6d)}"
+    assert len(robot_state_6d) == len(action_delta_6d), (
+        f"Mismatch in {pickle_path}, lengths differ by {len(robot_state_6d) - len(action_delta_6d)}"
+    )
 
     # Extract the pickle file name as the path after `raw` in the path
     pickle_file = "/".join(pickle_path.parts[pickle_path.parts.index("raw") + 1 :])
@@ -219,19 +233,13 @@ def parallel_process_pickle_files(
             )
             for path in pickle_paths
         ]
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="Processing files"
-        ):
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing files"):
             data = future.result()
             # Aggregate data from each file
             for key in data:
                 if key == "episode_length":
                     # Calculate and append to episode_ends
-                    last_end = (
-                        aggregated_data["episode_ends"][-1]
-                        if len(aggregated_data["episode_ends"]) > 0
-                        else 0
-                    )
+                    last_end = aggregated_data["episode_ends"][-1] if len(aggregated_data["episode_ends"]) > 0 else 0
                     aggregated_data["episode_ends"].append(last_end + data[key])
                 else:
                     aggregated_data[key].append(data[key])
@@ -274,9 +282,7 @@ def parallel_write_to_zarr(z, aggregated_data, num_threads):
             futures.append(executor.submit(write_to_zarr_store, z, key, value))
 
         # Wait for all futures to complete and track progress
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="Writing to Zarr store"
-        ):
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Writing to Zarr store"):
             future.result()
 
 
@@ -297,7 +303,7 @@ if __name__ == "__main__":
         "--randomness",
         "-r",
         type=str,
-        default=None,
+        default="low",
         nargs="+",
     )
     parser.add_argument(
@@ -305,10 +311,10 @@ if __name__ == "__main__":
         "-d",
         type=str,
         choices=["success", "failure", "partial_success"],
-        default=None,
+        default="success",
         nargs="+",
     )
-    parser.add_argument("--calculate-pos-action-from-delta", action="store_true")
+    parser.add_argument("--calculate-pos-action-from-delta", action="store_true", default=True)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--randomize-order", action="store_true")
@@ -349,18 +355,14 @@ if __name__ == "__main__":
     print(f"Output path: {output_path}")
 
     if output_path.exists() and not args.overwrite:
-        raise ValueError(
-            f"Output path already exists: {output_path}. Use --overwrite to overwrite."
-        )
+        raise ValueError(f"Output path already exists: {output_path}. Use --overwrite to overwrite.")
 
     # Process all pickle files
     chunksize = 1_000
     noop_threshold = 0.0
     n_cpus = min(os.cpu_count(), args.n_cpus)
 
-    print(
-        f"Processing pickle files with {n_cpus} CPUs, chunksize={chunksize}, noop_threshold={noop_threshold}"
-    )
+    print(f"Processing pickle files with {n_cpus} CPUs, chunksize={chunksize}, noop_threshold={noop_threshold}")
 
     all_data = parallel_process_pickle_files(
         pickle_paths,
@@ -410,9 +412,7 @@ if __name__ == "__main__":
     z.attrs["rotation_mode"] = "rot_6d"
     z.attrs["n_episodes"] = len(z["episode_ends"])
     z.attrs["n_timesteps"] = len(z["action/delta"])
-    z.attrs["mean_episode_length"] = round(
-        len(z["action/delta"]) / len(z["episode_ends"])
-    )
+    z.attrs["mean_episode_length"] = round(len(z["action/delta"]) / len(z["episode_ends"]))
     z.attrs["calculated_pos_action_from_delta"] = args.calculate_pos_action_from_delta
     z.attrs["randomize_order"] = args.randomize_order
     z.attrs["random_seed"] = args.random_seed

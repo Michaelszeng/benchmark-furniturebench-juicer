@@ -452,6 +452,8 @@ if __name__ == "__main__":
     print(f"Dataset: {args.zarr_path}")
     print(f"Episodes: {n_episodes}  |  Total frames: {episode_ends[-1]}")
     print()
+    print(f"Structure:\n{zarr_lib.open_group(args.zarr_path, mode='r').tree()}")
+    print()
     print("Controls:")
     print("  k / l     step 1 / 10 frames forward")
     print("  j / h     step 1 / 10 frames backward")

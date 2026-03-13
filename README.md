@@ -7,6 +7,29 @@ To run data collection (where `FURNITURE` in `['lamp', 'square_table', 'desk', '
 python src/data_collection/scripted.py -f "FURNITURE"
 ```
 
+To run teleop the robot:
+```bash
+python src/data_collection/teleop.py -f "FURNITURE"
+```
+
+To puppeteer the scene (set poses of all parts + robot):
+```bash
+python src/data_collection/puppeteer.py -f "FURNITURE"
+```
+
+### Data Generation
+
+Run Scripted Policy (to generate `.pkl.xz` files):
+```bash
+python src/data_collection/scripted.py -f "FURNITURE"
+```
+
+Convert `.pkl.xz` to `.zarr`:
+```bash
+python src/data_processing/process_pickles.py -f "FURNITURE" -s "scripted" -e "sim"
+```
+
+
 ## Installation Instructions
 
 

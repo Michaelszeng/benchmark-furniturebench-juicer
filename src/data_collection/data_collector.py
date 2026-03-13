@@ -220,7 +220,10 @@ class DataCollector:
                 # Pop the last reward and action so that obs has length plus 1 then those of actions and rewards.
                 self.rews.pop()
                 self.acts.pop()
+                self.num_fail += 1
+                self.traj_counter += 1
                 obs = self.save_and_reset(CollectEnum.FAIL, info)
+                print(f"Success: {self.num_success}, Fail: {self.num_fail}")
                 continue
 
             # Logging a step.

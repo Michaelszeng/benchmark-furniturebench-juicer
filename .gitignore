@@ -10,6 +10,7 @@ artifacts/
 *.mp4
 *.pt
 *.pth
+*.pkl.xz
 training-artifacts/
 
 # Byte-compiled / optimized / DLL files

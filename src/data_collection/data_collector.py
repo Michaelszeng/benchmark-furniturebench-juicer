@@ -132,7 +132,8 @@ class DataCollector:
         done = False
         next_obs = None
 
-        while self.num_success < self.num_demos:
+        num_saved = lambda: self.num_success + (self.num_fail if self.save_failure else 0)
+        while num_saved() < self.num_demos:
             # Get an action.
             if self.scripted:
                 action, skill_complete = self.env.get_assembly_action()
@@ -195,7 +196,6 @@ class DataCollector:
 
                     obs = self.save_and_reset(collect_enum, {})
                     self.num_success += 1
-                self.traj_counter += 1
                 print(f"Success: {self.num_success}, Fail: {self.num_fail}")
                 done = False
                 continue
@@ -221,7 +221,6 @@ class DataCollector:
                 self.rews.pop()
                 self.acts.pop()
                 self.num_fail += 1
-                self.traj_counter += 1
                 obs = self.save_and_reset(CollectEnum.FAIL, info)
                 print(f"Success: {self.num_success}, Fail: {self.num_fail}")
                 continue
@@ -273,11 +272,15 @@ class DataCollector:
                 self.skills.append(skill_complete)
             obs = next_obs
 
-        print(f"Collected {self.traj_counter} / {self.num_demos} successful trajectories!")
+        kind = "total" if self.save_failure else "successful"
+        print(
+            f"Collected {num_saved()} / {self.num_demos} {kind} trajectories (success={self.num_success}, fail={self.num_fail})!"
+        )
 
     def save_and_reset(self, collect_enum: CollectEnum, info):
         """Saves the collected data and reset the environment."""
         self.save(collect_enum, info)
+        self.traj_counter += 1
         print(f"Saved {self.traj_counter} trajectories in this run.")
         return self.reset()
 

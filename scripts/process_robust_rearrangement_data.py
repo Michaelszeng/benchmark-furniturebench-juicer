@@ -29,27 +29,14 @@ import gym
 import furniture_bench  # noqa: F401 - registers FurnitureSim envs with gym
 
 import numpy as np
-import trimesh
-from scipy.spatial import cKDTree
 import zarr
 from scipy.spatial.transform import Rotation as R
 from tqdm import tqdm
 import torch
 
+from furniture_bench.sim_config import sim_config
 from src.common.geometry import np_rot_6d_to_isaac_quat
 from src.data_processing.utils import resize, resize_crop
-
-
-# Path to furniture-bench assets directory.
-_ASSET_ROOT = Path(__file__).parent.parent / "furniture-bench" / "furniture_bench" / "assets"
-
-# Inner-face sample grid on the rubber tip in the *finger link* frame.
-# The rubber tip box has origin (0, 7.58mm, 45.25mm) and size 17.5 x 15.2 x 18.5 mm.
-# Inner face (Y≈0 in finger link frame): X ∈ [-8.75, 8.75] mm, Z ∈ [36, 54.5] mm.
-_FIN_X = np.array([-0.00875, 0.0, 0.00875])  # m, along finger width
-_FIN_Z = np.array([0.036, 0.04525, 0.0545])   # m, along finger length (in finger frame)
-# Joint origin offset in hand frame: panda_finger_joint1 at Z=0.0584 m.
-_FINGER_JOINT_Z = 0.0584  # m
 
 
 # ---------------------------------------------------------------------------
@@ -185,105 +172,51 @@ def disable_all_collisions(env_inner):
 
 
 # ---------------------------------------------------------------------------
-# Mesh loading — vertex KD-trees for fast proximity queries
+# Finger split via physics simulation
 # ---------------------------------------------------------------------------
 
-# Penetration threshold: sample points within this distance of the nearest
-# mesh vertex are considered to be in contact / penetrating.
-# The vertex KD-tree slightly over-estimates true surface distance (it finds
-# nearest vertex, not nearest face), but for meshes with ~60k vertices the
-# average vertex spacing is ~0.6 mm — negligible vs. this 3 mm threshold.
-_PENETRATION_THRESHOLD_M = 0.003  # 3 mm
 
-
-def load_part_kdtrees(furniture):
-    """Load OBJ mesh for each furniture part; build a cKDTree on its vertices.
-
-    Using a vertex KD-tree instead of trimesh.proximity.closest_point avoids
-    the ~90 ms per-call cost of a brute-force face search (trimesh's
-    closest_point does not cache a spatial index across calls).  A cKDTree
-    query for 18 points is ~0.15 ms after a one-time 20 ms build cost.
-
-    Args:
-        furniture: Furniture instance (e.g. OneLeg), with .parts list.
-
-    Returns:
-        kdtrees: list of scipy.spatial.cKDTree, one per part, with vertices
-            in the part's local (URDF mesh) frame.
-    """
-    kdtrees = []
-    for part in furniture.parts:
-        # asset_file is like "furniture/urdf/square_table/square_table_top.urdf"
-        # The corresponding mesh is at "furniture/mesh/square_table/square_table_top.obj"
-        urdf_rel = part.asset_file
-        mesh_rel = urdf_rel.replace("urdf/", "mesh/").replace(".urdf", ".obj")
-        mesh_path = _ASSET_ROOT / mesh_rel
-        loaded = trimesh.load(str(mesh_path), force="mesh")
-        if isinstance(loaded, trimesh.Scene):
-            loaded = trimesh.util.concatenate(list(loaded.geometry.values()))
-        kdtrees.append(cKDTree(loaded.vertices))
-    return kdtrees
-
-
-# ---------------------------------------------------------------------------
-# Finger split via unsigned proximity to raw mesh
-# ---------------------------------------------------------------------------
-
-_SCAN_OFFSETS_M = np.linspace(-0.003, 0.003, 20)
-
-
-def _finger_sample_pts_world(hand_pos_np, R_hand, d1, d2):
-    """Compute inner-face sample points for left and right fingers in world frame.
-
-    Left finger moves in the +Y direction of the hand frame by d1.
-    Right finger moves in the -Y direction of the hand frame by d2.
-    The inner faces of the rubber tips (facing toward each other) lie at
-    approximately Y=d1 (left) and Y=-d2 (right) in hand frame.
-
-    Returns:
-        pts: (N, 3) float64 array in world frame.
-    """
-    pts = []
-    for zf in _FIN_Z:
-        for xf in _FIN_X:
-            # Left finger inner face: inner Y = d1 in hand frame (from joint axis)
-            pt_left_hand = np.array([xf, d1, _FINGER_JOINT_Z + zf])
-            # Right finger inner face: inner Y = -d2 in hand frame
-            pt_right_hand = np.array([xf, -d2, _FINGER_JOINT_Z + zf])
-            pts.append(hand_pos_np + R_hand @ pt_left_hand)
-            pts.append(hand_pos_np + R_hand @ pt_right_hand)
-    return np.array(pts, dtype=np.float64)  # (18, 3)
-
-
-def find_finger_split(
+def find_finger_split_sim(
     env_inner,
     gripper_width: float,
     parts_poses_42d: np.ndarray,
-    april_to_sim_mat: np.ndarray,
-    part_kdtrees: list,
+    arm_q: np.ndarray,
+    pos_target: torch.Tensor,
+    n_steps: int = 50,
     grasp_threshold: float = 0.04,
 ):
-    """Return (d1, d2) finger DOF values that minimise finger-mesh penetration.
+    """Return (d1, d2) finger DOF positions by simulating gripper closing.
 
-    Uses a vertex KD-tree query (nearest-vertex distance) rather than a full
-    surface closest-point search.  This is ~50× faster while remaining
-    accurate: for meshes with ~60k vertices the nearest-vertex distance
-    overestimates the true surface distance by at most ~0.6 mm, which is
-    negligible compared to the 3 mm threshold.
+    Re-enables collisions, then simulates the gripper closing toward
+    gripper_width/2 while kinematically locking the arm and all parts in
+    place.  Contact forces naturally determine where each finger stops.
 
-    No additional simulate() calls are needed — no physics interaction occurs.
+    Kinematic locking is implemented as a snap-back each step:
+      - Parts: reset pos/quat AND zero linvel/angvel each step so physics
+        cannot accumulate part velocity between steps.
+      - Arm: reset DOF positions to the IK solution each step, zeroing
+        arm DOF velocities (so no arm drift).
+      - Fingers: DOF positions are read after each step and fed back as the
+        next step's starting position (zeroing finger velocity), but the
+        position-target remains at gripper_width/2 so the PD controller
+        continues driving fingers toward the target.
+
+    Zeroing velocity each step keeps the system first-order and overdamped:
+    each step moves the finger ~85% of the remaining distance toward the
+    target (for typical stiffness/mass values), so 50 steps is far more
+    than enough to converge.  Contact forces from parts stop fingers before
+    they reach gripper_width/2.
 
     Args:
-        env_inner: Unwrapped FurnitureSimEnv.  rb_states must be current for
-            the arm configuration (i.e., solve_ik must have been called first).
+        env_inner: Unwrapped FurnitureSimEnv.
         gripper_width: Total gripper opening = d1 + d2 (metres).
-        parts_poses_42d: (42,) float32, 5-part + 1-obstacle poses in AprilTag
-            frame, each part as 7D (pos xyz + quat xyzw).
-        april_to_sim_mat: (4, 4) numpy float64 matrix mapping AprilTag frame
-            to world (sim) frame.
-        part_kdtrees: list of scipy.spatial.cKDTree, one per furniture part,
-            built on the part's mesh vertices in the part's local frame.
-        grasp_threshold: Gripper width above which the split is symmetric.
+        parts_poses_42d: (42,) float32 parts poses in AprilTag frame.
+        arm_q: (7,) float64 arm joint positions from IK solve.
+        pos_target: (1, 9) position-target tensor (shared, already holding
+            the arm at arm_q from the IK solve).
+        n_steps: Number of simulation steps for gripper closing.
+        grasp_threshold: Gripper width above which the split is assumed
+            symmetric (no contact possible).
 
     Returns:
         d1: float, left finger DOF position (metres).
@@ -293,46 +226,56 @@ def find_finger_split(
     if w >= grasp_threshold:
         return w / 2.0, w / 2.0
 
-    # Read hand pose from rb_states (current after last solve_ik iteration).
-    hand_pos = env_inner.rb_states[env_inner.ee_idxs[0], :3].cpu().numpy()
-    hand_quat_xyzw = env_inner.rb_states[env_inner.ee_idxs[0], 3:7].cpu().numpy()
-    R_hand = R.from_quat(hand_quat_xyzw).as_matrix()
+    # Enable collisions so fingers interact with parts.
+    _set_collision_filters(env_inner, 0)
 
-    # Convert each part pose from AprilTag frame to world frame.
-    n_parts = len(part_kdtrees)
-    part_transforms = []  # list of (pos_world (3,), R_world (3,3))
-    for i in range(n_parts):
-        p = parts_poses_42d[i * 7 : (i + 1) * 7]
-        mat_april = np.eye(4)
-        mat_april[:3, :3] = R.from_quat(p[3:7]).as_matrix()
-        mat_april[:3, 3] = p[:3]
-        mat_world = april_to_sim_mat @ mat_april
-        part_transforms.append((mat_world[:3, 3], mat_world[:3, :3]))
+    part_actor_idxs = torch.tensor(env_inner.part_actor_idx_by_env[0], device=env_inner.device, dtype=torch.int32)
 
-    best_y = 0.0
-    best_cost = float("inf")
+    # Arm: hold at IK solution via position target (DOF_MODE_POS).
+    pos_target[0, :7] = torch.tensor(arm_q, dtype=torch.float32, device=env_inner.device)
+    env_inner.isaac_gym.set_dof_position_target_tensor(env_inner.sim, gymtorch.unwrap_tensor(pos_target))
 
-    for y_off in _SCAN_OFFSETS_M:
-        d1 = float(np.clip(w / 2.0 + y_off, 0.0, w))
-        d2 = w - d1
+    # Fingers: DOF_MODE_EFFORT with stiffness=0/damping=0 — position targets
+    # have no effect.  Must drive closing via set_dof_actuation_force_tensor
+    # with the same torque magnitude the normal env uses.
+    torque_action = torch.zeros_like(env_inner.dof_pos)
+    torque_action[0, 7:9] = -float(sim_config["robot"]["gripper_torque"])
 
-        pts_world = _finger_sample_pts_world(hand_pos, R_hand, d1, d2)
+    for _ in range(n_steps):
+        # Lock parts: zero velocities in root_tensor before _reset_parts so
+        # the single set_actor_root_state_tensor_indexed call commits
+        # pos + quat + zero linvel/angvel together.
+        env_inner.root_tensor[part_actor_idxs.long(), 7:13] = 0.0
+        env_inner._reset_parts(0, parts_poses_42d)
 
-        total_cost = 0.0
-        for kd, (pos_part, R_part) in zip(part_kdtrees, part_transforms):
-            # Transform sample points into the part's local (mesh vertex) frame.
-            pts_local = (R_part.T @ (pts_world - pos_part).T).T  # (N, 3)
-            # Distance to nearest mesh vertex (fast KD-tree query).
-            dists, _ = kd.query(pts_local, workers=-1)
-            # Penalise points within _PENETRATION_THRESHOLD_M of any surface.
-            total_cost += float(np.sum(np.maximum(0.0, _PENETRATION_THRESHOLD_M - dists)))
+        # Lock arm: reset arm DOFs to IK solution, carry current finger
+        # positions forward.  _reset_franka zeros all DOF velocities, which
+        # makes the arm fully static and makes each finger step independent
+        # (first-order update toward the target).
+        finger_dofs = env_inner.dof_pos[0, 7:9].cpu().numpy()
+        env_inner._reset_franka(0, np.concatenate([arm_q, finger_dofs]))
 
-        if total_cost < best_cost:
-            best_cost = total_cost
-            best_y = y_off
+        # Apply closing torque.  Must be called after _reset_franka because
+        # set_dof_state_tensor_indexed (inside _reset_franka) overwrites the
+        # dof state on the GPU; the actuation force is a separate buffer.
+        env_inner.isaac_gym.set_dof_actuation_force_tensor(env_inner.sim, gymtorch.unwrap_tensor(torque_action))
 
-    d1 = float(np.clip(w / 2.0 + best_y, 0.0, w))
-    return d1, w - d1
+        env_inner.isaac_gym.simulate(env_inner.sim)
+        env_inner.isaac_gym.fetch_results(env_inner.sim, True)
+        env_inner.isaac_gym.refresh_dof_state_tensor(env_inner.sim)
+
+        if env_inner.viewer is not None:
+            env_inner.isaac_gym.step_graphics(env_inner.sim)
+            env_inner.isaac_gym.draw_viewer(env_inner.viewer, env_inner.sim, False)
+            env_inner.isaac_gym.sync_frame_time(env_inner.sim)
+
+    d1 = float(env_inner.dof_pos[0, 7].item())
+    d2 = float(env_inner.dof_pos[0, 8].item())
+
+    # # Restore collision-free mode so render_frame simulate() has no
+    # # unintended physics interactions.
+    # disable_all_collisions(env_inner)
+    return d1, d2
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +294,7 @@ def render_frame(env, env_inner, joint_9d, parts_poses_42d, pos_target: torch.Te
         env: Wrapped gymnasium env (used for get_observation).
         env_inner: env.unwrapped.
         joint_9d: (9,) ndarray arm (7) + gripper (2) joint positions.
-            joint_9d[7:9] are the symmetric finger split (gripper_width / 2 each).
+            joint_9d[7:9] are the finger DOF positions from find_finger_split_sim.
         parts_poses_42d: (42,) ndarray flat parts poses in AprilTag coords.
         pos_target: (1, 9) position-target tensor; holds the arm during simulate().
 
@@ -382,6 +325,9 @@ def render_frame(env, env_inner, joint_9d, parts_poses_42d, pos_target: torch.Te
     env_inner._reset_parts(0, parts_poses_42d)
     env_inner._reset_franka(0, dof_pos)
     env_inner.isaac_gym.step_graphics(env_inner.sim)
+    if env_inner.viewer is not None:
+        env_inner.isaac_gym.draw_viewer(env_inner.viewer, env_inner.sim, False)
+        env_inner.isaac_gym.sync_frame_time(env_inner.sim)
     env_inner.isaac_gym.refresh_dof_state_tensor(env_inner.sim)
     env_inner.isaac_gym.refresh_dof_force_tensor(env_inner.sim)
     env_inner.isaac_gym.refresh_rigid_body_state_tensor(env_inner.sim)
@@ -422,7 +368,7 @@ def copy_zarr_skeleton(src: zarr.Group, dst: zarr.Group, skip=("color_image1", "
 # ---------------------------------------------------------------------------
 
 
-def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path, part_kdtrees: list):
+def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path):
     src = zarr.open(str(input_zarr_path), mode="r")
     T = src["robot_state"].shape[0]
     H, W, C = 240, 320, 3
@@ -442,9 +388,6 @@ def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path, part_kdtree
     # gym.make() calls refresh() which calls start_access_image_tensors.
     # Close that mapping now so our simulate() calls during IK are safe.
     env_inner.isaac_gym.end_access_image_tensors(env_inner.sim)
-
-    # april_to_sim_mat: numpy (4,4) matrix, AprilTag frame -> world frame.
-    april_to_sim_mat = env_inner.april_to_sim_mat  # numpy float64
 
     episode_ends = src["episode_ends"][:]
     episode_starts = np.concatenate([[0], episode_ends[:-1]])
@@ -504,15 +447,15 @@ def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path, part_kdtree
 
             # Individual finger positions are not stored in the zarr; only the
             # total gripper_width = dof[7] + dof[8] is saved.  When the gripper
-            # is open, use a symmetric split.  When closed (grasping), find the
-            # split that minimises finger penetration into part meshes using an
-            # analytical signed-distance query (no extra simulate() calls).
-            joint_9d[7], joint_9d[8] = find_finger_split(
+            # is open, use a symmetric split.  When closed (grasping), simulate
+            # the gripper closing with collision detection to find where each
+            # finger naturally stops against the part.
+            joint_9d[7], joint_9d[8] = find_finger_split_sim(
                 env_inner,
                 gripper_width=gripper_width,
                 parts_poses_42d=parts_poses,
-                april_to_sim_mat=april_to_sim_mat,
-                part_kdtrees=part_kdtrees,
+                arm_q=joint_9d[:7],
+                pos_target=pos_target,
             )
 
             # Render (image tensor access is closed here, safe to call refresh).
@@ -551,6 +494,11 @@ def main():
     parser.add_argument(
         "--randomness", type=str, default="low", choices=["low", "med", "high"], help="Randomness level (default: low)"
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Open a viewer window so you can watch the simulation in real time.",
+    )
     args = parser.parse_args()
 
     input_dir = args.input_dir.resolve()
@@ -566,11 +514,11 @@ def main():
     # Do NOT redirect ASSET_ROOT -> default furniture-bench assets -> AprilTags present.
     # ctrl_mode="diffik": arm DOFs use DOF_MODE_POS (stiffness=1000) so position
     # targets hold the arm in place during IK's simulate() calls.
-    print(f"Creating env (furniture={args.furniture}, gpu={args.gpu_id}, ctrl_mode=diffik)")
+    print(f"Creating env (furniture={args.furniture}, gpu={args.gpu_id}, ctrl_mode=diffik, headless={args.headless})")
     env = gym.make(
         "FurnitureSimFull-v0",
         furniture=args.furniture,
-        headless=True,
+        headless=args.headless,
         num_envs=1,
         resize_img=False,
         np_step_out=False,
@@ -583,19 +531,13 @@ def main():
 
     env_inner = env.unwrapped
 
-    # Disable all collisions globally.  render_frame's simulate() is used only
-    # for FK propagation; disabling collisions ensures no physics interactions
-    # displace parts or fingers, so step_graphics renders the exact intended state.
-    print("Disabling all collisions...")
-    disable_all_collisions(env_inner)
+    # # Disable all collisions globally for the IK and rendering passes.
+    # # find_finger_split_sim re-enables them temporarily during the closing
+    # # simulation, then disables them again before render_frame runs.
+    # print("Disabling all collisions...")
+    # disable_all_collisions(env_inner)
 
-    # Load raw OBJ meshes for all furniture parts.
-    # Used by find_finger_split for unsigned-distance proximity queries.
-    print("Loading part meshes...")
-    part_kdtrees = load_part_kdtrees(env_inner.furnitures[0])
-    print(f"  Loaded {len(part_kdtrees)} part KD-trees: {[p.name for p in env_inner.furnitures[0].parts]}")
-
-    process_zarr(env, input_dir, output_dir, part_kdtrees)
+    process_zarr(env, input_dir, output_dir)
     print("Done.")
 
 

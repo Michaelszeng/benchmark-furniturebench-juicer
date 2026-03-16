@@ -183,51 +183,33 @@ def find_finger_split_sim(
     arm_q: np.ndarray,
     pos_target: torch.Tensor,
     n_steps: int = 50,
-    grasp_threshold: float = 0.04,
 ):
     """Return (d1, d2) finger DOF positions by simulating gripper closing.
 
-    Re-enables collisions, then simulates the gripper closing toward
-    gripper_width/2 while kinematically locking the arm and all parts in
-    place.  Contact forces naturally determine where each finger stops.
+    Simulates the gripper closing toward gripper_width/2 while kinematically
+    locking the arm and all parts in place.  Each finger is driven by a
+    closing torque only while it is still above the target (gripper_width/2);
+    once it reaches the target the torque is cut.  Contact forces from parts
+    naturally stop a finger before the target, producing an asymmetric split.
 
-    Kinematic locking is implemented as a snap-back each step:
-      - Parts: reset pos/quat AND zero linvel/angvel each step so physics
-        cannot accumulate part velocity between steps.
-      - Arm: reset DOF positions to the IK solution each step, zeroing
-        arm DOF velocities (so no arm drift).
-      - Fingers: DOF positions are read after each step and fed back as the
-        next step's starting position (zeroing finger velocity), but the
-        position-target remains at gripper_width/2 so the PD controller
-        continues driving fingers toward the target.
-
-    Zeroing velocity each step keeps the system first-order and overdamped:
-    each step moves the finger ~85% of the remaining distance toward the
-    target (for typical stiffness/mass values), so 50 steps is far more
-    than enough to converge.  Contact forces from parts stop fingers before
-    they reach gripper_width/2.
+    The loop exits early once both fingers are at or below gripper_width/2.
+    This gives smooth, threshold-free behavior: a fully-open gripper command
+    means the fingers are already at the target and converge in one step; a
+    grasping command closes the fingers until they hit the part or the target.
 
     Args:
         env_inner: Unwrapped FurnitureSimEnv.
-        gripper_width: Total gripper opening = d1 + d2 (metres).
+        gripper_width: Total commanded opening = d1 + d2 (metres).
         parts_poses_42d: (42,) float32 parts poses in AprilTag frame.
-        arm_q: (7,) float64 arm joint positions from IK solve.
-        pos_target: (1, 9) position-target tensor (shared, already holding
-            the arm at arm_q from the IK solve).
-        n_steps: Number of simulation steps for gripper closing.
-        grasp_threshold: Gripper width above which the split is assumed
-            symmetric (no contact possible).
+        arm_q: (7,) arm joint positions from IK solve.
+        pos_target: (1, 9) position-target tensor (shared).
+        n_steps: Maximum simulation steps for convergence.
 
     Returns:
         d1: float, left finger DOF position (metres).
         d2: float, right finger DOF position (metres).
     """
-    w = gripper_width
-    if w >= grasp_threshold:
-        return w / 2.0, w / 2.0
-
-    # Enable collisions so fingers interact with parts.
-    _set_collision_filters(env_inner, 0)
+    target = gripper_width / 2.0
 
     part_actor_idxs = torch.tensor(env_inner.part_actor_idx_by_env[0], device=env_inner.device, dtype=torch.int32)
 
@@ -235,29 +217,31 @@ def find_finger_split_sim(
     pos_target[0, :7] = torch.tensor(arm_q, dtype=torch.float32, device=env_inner.device)
     env_inner.isaac_gym.set_dof_position_target_tensor(env_inner.sim, gymtorch.unwrap_tensor(pos_target))
 
-    # Fingers: DOF_MODE_EFFORT with stiffness=0/damping=0 — position targets
-    # have no effect.  Must drive closing via set_dof_actuation_force_tensor
-    # with the same torque magnitude the normal env uses.
+    # Fingers: DOF_MODE_EFFORT — must use actuation force, not position target.
+    # Per-finger torque is zeroed once that finger reaches the target.
+    closing_torque = -float(sim_config["robot"]["gripper_torque"])
     torque_action = torch.zeros_like(env_inner.dof_pos)
-    torque_action[0, 7:9] = -float(sim_config["robot"]["gripper_torque"])
 
     for _ in range(n_steps):
-        # Lock parts: zero velocities in root_tensor before _reset_parts so
-        # the single set_actor_root_state_tensor_indexed call commits
-        # pos + quat + zero linvel/angvel together.
+        finger_dofs = env_inner.dof_pos[0, 7:9].cpu().numpy()
+
+        # Apply closing torque only to fingers still above the commanded target.
+        torque_action[0, 7] = closing_torque if finger_dofs[0] > target else 0.0
+        torque_action[0, 8] = closing_torque if finger_dofs[1] > target else 0.0
+
+        # Both fingers at or below target — done.
+        if torque_action[0, 7] == 0.0 and torque_action[0, 8] == 0.0:
+            break
+
+        # Lock parts: zero velocities, then reset pos/quat.
         env_inner.root_tensor[part_actor_idxs.long(), 7:13] = 0.0
         env_inner._reset_parts(0, parts_poses_42d)
 
-        # Lock arm: reset arm DOFs to IK solution, carry current finger
-        # positions forward.  _reset_franka zeros all DOF velocities, which
-        # makes the arm fully static and makes each finger step independent
-        # (first-order update toward the target).
-        finger_dofs = env_inner.dof_pos[0, 7:9].cpu().numpy()
+        # Lock arm, carry current finger positions; zeros all DOF velocities.
         env_inner._reset_franka(0, np.concatenate([arm_q, finger_dofs]))
 
-        # Apply closing torque.  Must be called after _reset_franka because
-        # set_dof_state_tensor_indexed (inside _reset_franka) overwrites the
-        # dof state on the GPU; the actuation force is a separate buffer.
+        # Apply torque (must follow _reset_franka; actuation force is a
+        # separate GPU buffer from the DOF state tensor).
         env_inner.isaac_gym.set_dof_actuation_force_tensor(env_inner.sim, gymtorch.unwrap_tensor(torque_action))
 
         env_inner.isaac_gym.simulate(env_inner.sim)
@@ -271,10 +255,6 @@ def find_finger_split_sim(
 
     d1 = float(env_inner.dof_pos[0, 7].item())
     d2 = float(env_inner.dof_pos[0, 8].item())
-
-    # # Restore collision-free mode so render_frame simulate() has no
-    # # unintended physics interactions.
-    # disable_all_collisions(env_inner)
     return d1, d2
 
 
@@ -446,10 +426,9 @@ def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path):
             current_q = joint_9d[:7]
 
             # Individual finger positions are not stored in the zarr; only the
-            # total gripper_width = dof[7] + dof[8] is saved.  When the gripper
-            # is open, use a symmetric split.  When closed (grasping), simulate
-            # the gripper closing with collision detection to find where each
-            # finger naturally stops against the part.
+            # total gripper_width = dof[7] + dof[8] is saved.  Simulate the
+            # gripper closing to gripper_width/2, with contact forces naturally
+            # stopping each finger if a part is in the way.
             joint_9d[7], joint_9d[8] = find_finger_split_sim(
                 env_inner,
                 gripper_width=gripper_width,

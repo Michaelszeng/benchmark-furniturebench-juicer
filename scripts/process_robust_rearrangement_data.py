@@ -39,6 +39,7 @@ import torch
 from furniture_bench.sim_config import sim_config
 from src.common.geometry import np_rot_6d_to_isaac_quat
 from src.data_processing.utils import resize, resize_crop
+import time
 
 
 # ---------------------------------------------------------------------------
@@ -109,8 +110,7 @@ def solve_ik(
         # _reset_parts placing furniture against the obstacle generates contact
         # forces that cumulatively tilt the obstacles without this reset.
         if parts_poses_42d is not None:
-            env_inner._reset_parts(0, parts_poses_42d)
-            reset_obstacle_pose(env_inner, parts_poses_42d)
+            reset_parts_and_obstacles(env_inner, parts_poses_42d)
         # Set arm to current guess and tick physics (position-controlled, so
         # the arm stays put rather than falling under gravity).
         dof_np = np.concatenate([current_q.cpu().numpy(), env_inner.default_dof_pos[7:9]])
@@ -193,11 +193,31 @@ def reset_obstacle_pose(env_inner, parts_poses_42d: np.ndarray):
     env_inner.root_tensor[idxs, 0:3] = front_pos + env_inner._obstacle_offsets
     env_inner.root_tensor[idxs, 3:7] = env_inner._obstacle_quat
     env_inner.root_tensor[idxs, 7:13] = 0.0
+
+    # env_inner.isaac_gym.set_actor_root_state_tensor_indexed(
+    #     env_inner.sim,
+    #     gymtorch.unwrap_tensor(env_inner.root_tensor),
+    #     gymtorch.unwrap_tensor(env_inner._obstacle_actor_idxs),
+    #     3,
+    # )
+
+
+def reset_parts_and_obstacles(env_inner, parts_poses_42d: np.ndarray):
+    """Reset furniture parts and obstacles in a single set_actor_root_state_tensor_indexed call.
+
+    IsaacGym only honours one set_actor_root_state_tensor_indexed call per
+    physics step; a second call cancels the first.  This helper writes both
+    sets of actors to root_tensor and commits them together.
+    """
+    env_inner._reset_parts(0, parts_poses_42d, skip_set_state=True)
+    reset_obstacle_pose(env_inner, parts_poses_42d)
+    part_idxs = torch.tensor(env_inner.part_actor_idx_by_env[0], device=env_inner.device, dtype=torch.int32)
+    all_idxs = torch.cat([part_idxs, env_inner._obstacle_actor_idxs])
     env_inner.isaac_gym.set_actor_root_state_tensor_indexed(
         env_inner.sim,
         gymtorch.unwrap_tensor(env_inner.root_tensor),
-        gymtorch.unwrap_tensor(env_inner._obstacle_actor_idxs),
-        3,
+        gymtorch.unwrap_tensor(all_idxs),
+        len(all_idxs),
     )
 
 
@@ -212,7 +232,7 @@ def find_finger_split_sim(
     parts_poses_42d: np.ndarray,
     arm_q: np.ndarray,
     pos_target: torch.Tensor,
-    n_steps: int = 50,
+    n_steps: int = 100,
 ):
     """Return (d1, d2) finger DOF positions by simulating gripper closing.
 
@@ -246,7 +266,7 @@ def find_finger_split_sim(
     env_inner.isaac_gym.set_dof_position_target_tensor(env_inner.sim, gymtorch.unwrap_tensor(pos_target))
 
     # Fingers: DOF_MODE_EFFORT — must use actuation force, not position target.
-    closing_torque = -float(sim_config["robot"]["gripper_torque"])
+    closing_torque = -float(sim_config["robot"]["gripper_torque"]) / 4
     torque_action = torch.zeros_like(env_inner.dof_pos)
 
     for _ in range(n_steps):
@@ -263,8 +283,8 @@ def find_finger_split_sim(
 
         # Lock parts and obstacles: zero velocities, then reset pos/quat.
         env_inner.root_tensor[part_actor_idxs.long(), 7:13] = 0.0
-        env_inner._reset_parts(0, parts_poses_42d)
-        reset_obstacle_pose(env_inner, parts_poses_42d)
+        # env_inner._reset_parts(0, parts_poses_42d)
+        reset_parts_and_obstacles(env_inner, parts_poses_42d)
 
         # Lock arm, carry current finger positions; zeros all DOF velocities.
         env_inner._reset_franka(0, np.concatenate([arm_q, finger_dofs]))
@@ -278,11 +298,10 @@ def find_finger_split_sim(
         env_inner.isaac_gym.refresh_dof_state_tensor(env_inner.sim)
 
         if env_inner.viewer is not None:
-            snap_fingers = env_inner.dof_pos[0, 7:9].cpu().numpy()
-            env_inner.root_tensor[part_actor_idxs.long(), 7:13] = 0.0
-            env_inner._reset_parts(0, parts_poses_42d)
-            env_inner._reset_franka(0, np.concatenate([arm_q, snap_fingers]))
-            reset_obstacle_pose(env_inner, parts_poses_42d)
+            # snap_fingers = env_inner.dof_pos[0, 7:9].cpu().numpy()
+            # env_inner.root_tensor[part_actor_idxs.long(), 7:13] = 0.0
+            # reset_parts_and_obstacles(env_inner, parts_poses_42d)
+            # env_inner._reset_franka(0, np.concatenate([arm_q, snap_fingers]))
             env_inner.isaac_gym.step_graphics(env_inner.sim)
             env_inner.isaac_gym.draw_viewer(env_inner.viewer, env_inner.sim, False)
             env_inner.isaac_gym.sync_frame_time(env_inner.sim)
@@ -315,24 +334,25 @@ def render_frame(env, env_inner, joint_9d, parts_poses_42d, pos_target: torch.Te
     dof_pos = joint_9d.copy()
 
     env_inner.furnitures[0].reset()
-    env_inner._reset_franka(0, dof_pos)
-    env_inner._reset_parts(0, parts_poses_42d)
     env_inner.env_steps[0] = 0
 
     # Set position targets so the simulate() step holds the arm in place.
     pos_target[0, :7] = torch.tensor(dof_pos[:7], dtype=torch.float32, device=env_inner.device)
     pos_target[0, 7:9] = torch.tensor(dof_pos[7:9], dtype=torch.float32, device=env_inner.device)
     env_inner.isaac_gym.set_dof_position_target_tensor(env_inner.sim, gymtorch.unwrap_tensor(pos_target))
+    env_inner.isaac_gym.set_dof_actuation_force_tensor(
+        env_inner.sim, gymtorch.unwrap_tensor(torch.zeros_like(env_inner.dof_pos))
+    )  # Zero finger torque
 
+    # Gravity is already disabled on all furniture parts (set once at startup),
+    # so they hold position during simulate() without needing high mass.
+    # The finger DOFs come from find_finger_split_sim (natural contact position),
+    # so PD position-target error ≈ 0 → contact forces ≈ 0 → negligible displacement.
+    reset_parts_and_obstacles(env_inner, parts_poses_42d)
+    env_inner._reset_franka(0, dof_pos)
     env_inner.isaac_gym.simulate(env_inner.sim)
     env_inner.isaac_gym.fetch_results(env_inner.sim, True)
 
-    # Snap parts, arm, and obstacles back to exact target positions so that
-    # step_graphics renders them at the right place (gravity / contact forces
-    # during simulate() can displace them slightly).
-    env_inner._reset_parts(0, parts_poses_42d)
-    env_inner._reset_franka(0, dof_pos)
-    reset_obstacle_pose(env_inner, parts_poses_42d)
     env_inner.isaac_gym.step_graphics(env_inner.sim)
     if env_inner.viewer is not None:
         env_inner.isaac_gym.draw_viewer(env_inner.viewer, env_inner.sim, False)
@@ -415,10 +435,9 @@ def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path):
             env_inner.isaac_gym.end_access_image_tensors(env_inner.sim)
             image_access_open = False
 
-        # Set obstacle to this episode's randomised position before any simulation.
-        reset_obstacle_pose(env_inner, parts_poses_all[ep_start])
-
         for frame_idx in tqdm(range(ep_start, ep_end), leave=False):
+            if frame_idx < 300:
+                continue
             rs = robot_state_all[frame_idx]  # (16,)
             parts_poses = parts_poses_all[frame_idx]  # (42,)
 
@@ -574,6 +593,15 @@ def main():
         for p in props:
             p.filter = 1
         env_inner.isaac_gym.set_actor_rigid_shape_properties(env_inner.envs[0], h, props)
+
+    # Remove gravity from all furniture parts so they stay put during simulate()
+    # without needing to be reset every sub-step.
+    for part in env_inner.furnitures[0].parts:
+        h = env_inner.isaac_gym.find_actor_handle(env_inner.envs[0], part.name)
+        props = env_inner.isaac_gym.get_actor_rigid_body_properties(env_inner.envs[0], h)
+        for p in props:
+            p.flags |= gymapi.RIGID_BODY_DISABLE_GRAVITY
+        env_inner.isaac_gym.set_actor_rigid_body_properties(env_inner.envs[0], h, props, recomputeInertia=False)
 
     process_zarr(env, input_dir, output_dir)
     print("Done.")

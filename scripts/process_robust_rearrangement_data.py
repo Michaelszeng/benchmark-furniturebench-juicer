@@ -24,9 +24,10 @@ Usage:
 import argparse
 from pathlib import Path
 
-from isaacgym import gymtorch  # must come before torch
+from isaacgym import gymtorch, gymapi  # must come before torch
 import gym
 import furniture_bench  # noqa: F401 - registers FurnitureSim envs with gym
+from furniture_bench.envs.furniture_sim_env import FurnitureSimEnv, ASSET_ROOT
 
 import numpy as np
 import zarr
@@ -114,6 +115,7 @@ def solve_ik(
         # the episode boundary.
         if parts_poses_42d is not None:
             env_inner._reset_parts(0, parts_poses_42d)
+            reset_obstacle_pose(env_inner, parts_poses_42d)
         # Set arm to current guess and tick physics (position-controlled, so
         # the arm stays put rather than falling under gravity).
         dof_np = np.concatenate([current_q.cpu().numpy(), env_inner.default_dof_pos[7:9]])
@@ -171,6 +173,113 @@ def disable_all_collisions(env_inner):
     _set_collision_filters(env_inner, 1)
 
 
+def enable_all_collisions(env_inner):
+    """Set filter=0 everywhere: (filterA & filterB) != 0 suppresses all pairs."""
+    _set_collision_filters(env_inner, 0)
+
+
+# ---------------------------------------------------------------------------
+# Obstacle repositioning
+# ---------------------------------------------------------------------------
+
+
+# Module-level cache: keyed by id(env_inner).
+_obstacle_cache: dict = {}
+
+
+def _get_obstacle_cache(env_inner):
+    """Build or return cached obstacle actor indices and constant data."""
+    key = id(env_inner)
+    if key not in _obstacle_cache:
+        front_idx = env_inner.isaac_gym.find_actor_index(env_inner.envs[0], "obstacle_front", gymapi.DOMAIN_SIM)
+        right_idx = env_inner.isaac_gym.find_actor_index(env_inner.envs[0], "obstacle_right", gymapi.DOMAIN_SIM)
+        left_idx = env_inner.isaac_gym.find_actor_index(env_inner.envs[0], "obstacle_left", gymapi.DOMAIN_SIM)
+
+        obstacle_actor_idxs = torch.tensor([front_idx, right_idx, left_idx], device=env_inner.device, dtype=torch.int32)
+
+        # All three obstacles are created with gymapi.Quat.from_axis_angle(z, π/2),
+        # i.e. xyzw = [0, 0, sin(π/4), cos(π/4)].  Use the analytical value
+        # rather than reading from root_tensor: with dynamic obstacles, contact
+        # forces during gym.make()'s initial simulate() can perturb root_tensor
+        # before we first read it, causing a wrong cached rotation.
+        half_sqrt2 = float(np.sqrt(2) / 2)
+        obstacle_quat = torch.tensor(
+            [0.0, 0.0, half_sqrt2, half_sqrt2], dtype=torch.float32, device=env_inner.device
+        )
+
+        right_offset = torch.tensor([-0.075, -0.175, 0.0], dtype=torch.float32, device=env_inner.device)
+        left_offset = torch.tensor([-0.075, 0.175, 0.0], dtype=torch.float32, device=env_inner.device)
+
+        _obstacle_cache[key] = (
+            front_idx, right_idx, left_idx,
+            obstacle_actor_idxs,
+            obstacle_quat,
+            right_offset, left_offset,
+        )
+    return _obstacle_cache[key]
+
+
+def reset_obstacle_pose(env_inner, parts_poses_42d: np.ndarray):
+    """Reposition the U-shaped obstacle to match the pose stored in the zarr.
+
+    The robust-rearrangement dataset was collected with FurnitureRLSimEnv, which
+    randomises the obstacle position per episode (±0.02 m for 'low' randomness)
+    and appends the obstacle_front april-frame pose as the 6th element of
+    parts_poses (indices [35:42]).  Our rendering env (FurnitureSimEnv) places
+    the obstacle at a fixed default position, causing a per-episode discrepancy.
+
+    This function reads the stored obstacle_front pose, converts it to sim
+    coordinates, and repositions obstacle_front / obstacle_right / obstacle_left
+    so that they match the original data collection.
+
+    The side obstacles are always offset from obstacle_front in sim space by:
+      right: (-0.075, -0.175, 0)
+      left:  (-0.075, +0.175, 0)
+    (These are the hardcoded offsets from FurnitureRLSimEnv.create_envs.)
+
+    Must be called after every simulate() call and before step_graphics() so
+    the graphical state captures the correct obstacle positions.
+    """
+    from furniture_bench.utils.pose import get_mat
+
+    (
+        front_idx, right_idx, left_idx,
+        obstacle_actor_idxs,
+        obstacle_quat,
+        right_offset, left_offset,
+    ) = _get_obstacle_cache(env_inner)
+
+    # parts_poses_42d[35:38] = obstacle_front position in AprilTag frame.
+    obs_pos_april = parts_poses_42d[35:38].copy()
+    # Convert position to sim frame (rotation is irrelevant for translation).
+    april_mat = get_mat(obs_pos_april.tolist(), [0, 0, 0])
+    sim_mat = env_inner.april_coord_to_sim_coord(april_mat)
+    front_pos = torch.tensor(
+        [sim_mat[0, 3], sim_mat[1, 3], sim_mat[2, 3]],
+        dtype=torch.float32,
+        device=env_inner.device,
+    )
+
+    env_inner.root_tensor[front_idx, 0:3] = front_pos
+    env_inner.root_tensor[front_idx, 3:7] = obstacle_quat
+    env_inner.root_tensor[front_idx, 7:13] = 0.0
+
+    env_inner.root_tensor[right_idx, 0:3] = front_pos + right_offset
+    env_inner.root_tensor[right_idx, 3:7] = obstacle_quat
+    env_inner.root_tensor[right_idx, 7:13] = 0.0
+
+    env_inner.root_tensor[left_idx, 0:3] = front_pos + left_offset
+    env_inner.root_tensor[left_idx, 3:7] = obstacle_quat
+    env_inner.root_tensor[left_idx, 7:13] = 0.0
+
+    env_inner.isaac_gym.set_actor_root_state_tensor_indexed(
+        env_inner.sim,
+        gymtorch.unwrap_tensor(env_inner.root_tensor),
+        gymtorch.unwrap_tensor(obstacle_actor_idxs),
+        3,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Finger split via physics simulation
 # ---------------------------------------------------------------------------
@@ -209,8 +318,6 @@ def find_finger_split_sim(
         d1: float, left finger DOF position (metres).
         d2: float, right finger DOF position (metres).
     """
-    target = gripper_width / 2.0
-
     part_actor_idxs = torch.tensor(env_inner.part_actor_idx_by_env[0], device=env_inner.device, dtype=torch.int32)
 
     # Arm: hold at IK solution via position target (DOF_MODE_POS).
@@ -219,23 +326,23 @@ def find_finger_split_sim(
 
     # Fingers: DOF_MODE_EFFORT — must use actuation force, not position target.
     # Per-finger torque is zeroed once that finger reaches the target.
-    closing_torque = -float(sim_config["robot"]["gripper_torque"])
+    closing_torque = -float(sim_config["robot"]["gripper_torque"]) / 2
     torque_action = torch.zeros_like(env_inner.dof_pos)
 
     for _ in range(n_steps):
         finger_dofs = env_inner.dof_pos[0, 7:9].cpu().numpy()
 
-        # Apply closing torque only to fingers still above the commanded target.
-        torque_action[0, 7] = closing_torque if finger_dofs[0] > target else 0.0
-        torque_action[0, 8] = closing_torque if finger_dofs[1] > target else 0.0
-
-        # Both fingers at or below target — done.
-        if torque_action[0, 7] == 0.0 and torque_action[0, 8] == 0.0:
+        current_gripper_width = finger_dofs[0] + finger_dofs[1]
+        if current_gripper_width <= gripper_width:
             break
 
-        # Lock parts: zero velocities, then reset pos/quat.
+        torque_action[0, 7] = closing_torque
+        torque_action[0, 8] = closing_torque
+
+        # Lock parts and obstacles: zero velocities, then reset pos/quat.
         env_inner.root_tensor[part_actor_idxs.long(), 7:13] = 0.0
         env_inner._reset_parts(0, parts_poses_42d)
+        reset_obstacle_pose(env_inner, parts_poses_42d)
 
         # Lock arm, carry current finger positions; zeros all DOF velocities.
         env_inner._reset_franka(0, np.concatenate([arm_q, finger_dofs]))
@@ -249,6 +356,14 @@ def find_finger_split_sim(
         env_inner.isaac_gym.refresh_dof_state_tensor(env_inner.sim)
 
         if env_inner.viewer is not None:
+            # Snap back before drawing: step_graphics uses the current sim
+            # state, so without this parts drift visibly each step.
+            snap_fingers = env_inner.dof_pos[0, 7:9].cpu().numpy()
+            env_inner.root_tensor[part_actor_idxs.long(), 7:13] = 0.0
+            env_inner._reset_parts(0, parts_poses_42d)
+            env_inner._reset_franka(0, np.concatenate([arm_q, snap_fingers]))
+            # Re-apply obstacle positions after simulate().
+            reset_obstacle_pose(env_inner, parts_poses_42d)
             env_inner.isaac_gym.step_graphics(env_inner.sim)
             env_inner.isaac_gym.draw_viewer(env_inner.viewer, env_inner.sim, False)
             env_inner.isaac_gym.sync_frame_time(env_inner.sim)
@@ -302,8 +417,13 @@ def render_frame(env, env_inner, joint_9d, parts_poses_42d, pos_target: torch.Te
     # collisions are globally disabled).  Finger DOFs use DOF_MODE_EFFORT so
     # they drift even without contact forces; snapping ensures the rendered
     # positions exactly match the intended joint_9d values.
+    #
+    # Obstacles are dynamic (disable_gravity=True) so they can be repositioned
+    # via set_actor_root_state_tensor_indexed.  Re-apply positions here after
+    # simulate() so the render captures the correct per-episode obstacle layout.
     env_inner._reset_parts(0, parts_poses_42d)
     env_inner._reset_franka(0, dof_pos)
+    reset_obstacle_pose(env_inner, parts_poses_42d)
     env_inner.isaac_gym.step_graphics(env_inner.sim)
     if env_inner.viewer is not None:
         env_inner.isaac_gym.draw_viewer(env_inner.viewer, env_inner.sim, False)
@@ -381,8 +501,19 @@ def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path):
     image_access_open = False  # tracks whether start_access_image_tensors is active
 
     for ep_idx, (ep_start, ep_end) in enumerate(zip(episode_starts, episode_ends)):
+        # if ep_idx == 0:
+        #     continue
         print(f"  Episode {ep_idx + 1}/{len(episode_ends)}: frames {ep_start}-{ep_end}")
         current_q = None  # reset warm-start at episode boundary
+
+        # Reposition obstacles to match the per-episode randomised pose stored
+        # in parts_poses[35:42] (the obstacle_front april-frame pose appended by
+        # FurnitureRLSimEnv).  Must happen before IK and rendering so every
+        # frame in the episode is rendered with the correct obstacle layout.
+        if image_access_open:
+            env_inner.isaac_gym.end_access_image_tensors(env_inner.sim)
+            image_access_open = False
+        reset_obstacle_pose(env_inner, parts_poses_all[ep_start])
 
         for frame_idx in tqdm(range(ep_start, ep_end), leave=False):
             rs = robot_state_all[frame_idx]  # (16,)
@@ -490,6 +621,24 @@ def main():
     print(f"Input:  {input_dir}")
     print(f"Output: {output_dir}")
 
+    # Monkey-patch obstacle asset imports: replace fix_base_link=True with
+    # disable_gravity=True.  Fixed-base actors in IsaacGym are truly static —
+    # set_actor_root_state_tensor_indexed does not update their internal physics
+    # state, so step_graphics always renders them at their creation-time position.
+    # Dynamic actors with disabled gravity ARE repositioned by that API.
+    def _import_obstacle_front_dynamic(self):
+        asset_options = gymapi.AssetOptions()
+        asset_options.disable_gravity = True
+        return self.isaac_gym.load_asset(self.sim, ASSET_ROOT, "furniture/urdf/obstacle_front.urdf", asset_options)
+
+    def _import_obstacle_side_dynamic(self):
+        asset_options = gymapi.AssetOptions()
+        asset_options.disable_gravity = True
+        return self.isaac_gym.load_asset(self.sim, ASSET_ROOT, "furniture/urdf/obstacle_side.urdf", asset_options)
+
+    FurnitureSimEnv._import_obstacle_front_asset = _import_obstacle_front_dynamic
+    FurnitureSimEnv._import_obstacle_side_asset = _import_obstacle_side_dynamic
+
     # Do NOT redirect ASSET_ROOT -> default furniture-bench assets -> AprilTags present.
     # ctrl_mode="diffik": arm DOFs use DOF_MODE_POS (stiffness=1000) so position
     # targets hold the arm in place during IK's simulate() calls.
@@ -510,11 +659,19 @@ def main():
 
     env_inner = env.unwrapped
 
-    # # Disable all collisions globally for the IK and rendering passes.
-    # # find_finger_split_sim re-enables them temporarily during the closing
-    # # simulation, then disables them again before render_frame runs.
-    # print("Disabling all collisions...")
-    # disable_all_collisions(env_inner)
+    # Disable collisions between the three obstacle actors by setting their
+    # rigid-shape filter to 1.  Two shapes suppress collision when
+    # (filterA & filterB) != 0, so obstacle-obstacle pairs are suppressed
+    # while obstacle-furniture/franka pairs (filter=0) are unaffected.
+    # This is necessary because the obstacles are now dynamic (so they can be
+    # repositioned), but their U-shape geometry overlaps at the joints, causing
+    # large contact impulses that spin the side obstacles.
+    for obs_name in ("obstacle_front", "obstacle_right", "obstacle_left"):
+        h = env_inner.isaac_gym.find_actor_handle(env_inner.envs[0], obs_name)
+        props = env_inner.isaac_gym.get_actor_rigid_shape_properties(env_inner.envs[0], h)
+        for p in props:
+            p.filter = 1
+        env_inner.isaac_gym.set_actor_rigid_shape_properties(env_inner.envs[0], h, props)
 
     process_zarr(env, input_dir, output_dir)
     print("Done.")

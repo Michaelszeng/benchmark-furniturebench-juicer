@@ -562,6 +562,19 @@ def main():
             p.filter = 1
         env_inner.isaac_gym.set_actor_rigid_shape_properties(env_inner.envs[0], h, props)
 
+    # Disable obstacle-furniture collisions: furniture parts are reset to their
+    # stored positions each step (touching the obstacle). With dynamic obstacles,
+    # the bidirectional contact forces push furniture parts away, causing the
+    # gripper to close against a drifted part in find_finger_split_sim.
+    # filter=1 on furniture means obstacle-furniture = (1 & 1) != 0 → suppressed,
+    # while franka-furniture = (0 & 1) == 0 → still collide (needed for grasping).
+    for part in env_inner.furnitures[0].parts:
+        h = env_inner.isaac_gym.find_actor_handle(env_inner.envs[0], part.name)
+        props = env_inner.isaac_gym.get_actor_rigid_shape_properties(env_inner.envs[0], h)
+        for p in props:
+            p.filter = 1
+        env_inner.isaac_gym.set_actor_rigid_shape_properties(env_inner.envs[0], h, props)
+
     process_zarr(env, input_dir, output_dir)
     print("Done.")
 

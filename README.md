@@ -2,12 +2,9 @@
 
 ## Michael's Notes
 
-To run data collection (where `FURNITURE` in `['lamp', 'square_table', 'desk', 'drawer', 'cabinet', 'round_table', 'stool', 'chair', 'one_leg']`):
-```bash
-python src/data_collection/scripted.py -f "FURNITURE"
-```
+### Debugging Scripts
 
-To run teleop the robot:
+To teleop the robot:
 ```bash
 python src/data_collection/teleop.py -f "FURNITURE"
 ```
@@ -19,6 +16,8 @@ python src/data_collection/puppeteer.py -f "FURNITURE"
 
 ### Data Generation
 
+#### Scripted Data
+
 Run Scripted Policy (to generate `.pkl.xz` files):
 ```bash
 python src/data_collection/scripted.py -f "FURNITURE"
@@ -28,6 +27,69 @@ Convert `.pkl.xz` to `.zarr`:
 ```bash
 python src/data_processing/process_pickles.py -f "FURNITURE" -s "scripted" -e "sim"
 ```
+
+#### Robust Re-arrangement Data
+
+Download Robust Re-arrangement Data:
+```bash
+# One-time:
+pip install boto3
+pip install gymnasium
+python scripts/download_robust_rearrangement_data.py --task one_leg
+python scripts/download_robust_rearrangement_data.py --task lamp
+python scripts/download_robust_rearrangement_data.py --task round_table
+```
+
+Post-process the dataset with April Tags visualized (since all data used by this repo has April Tags):
+```bash
+python scripts/process_robust_rearrangement_data.py \
+        --input-dir dataset/processed/diffik/sim/one_leg/teleop/low/success.zarr \
+        --output-dir dataset/processed/diffik/sim/one_leg/teleop/low/success_processed.zarr \
+        --furniture "FURNITURE" \
+        --randomness low
+```
+
+#### Convert to Training Format
+
+Convert `zarr` to diffusion policy format (`<source_zarr_name>_translated/zarr`):
+```bash
+python src/data_processing/process_zarr.py dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success.zarr \
+    --output dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success_translated.zarr
+```
+
+#### Dataset Visualization
+```bash
+python scripts/visualize_dataset.py dataset/processed/diffik/sim/one_leg/teleop/low/success_processed.zarr
+```
+
+
+### Evaluating a `diffusion_policy` Checkpoint
+
+`src/eval/evaluate_model_custom.py` loads a `.ckpt` produced by the `diffusion-policy` repo and runs rollouts in the FurnitureBench sim.
+The following one-time setup is required in the `imitation-juicer` conda environment (Python 3.8 — the `diffusion-policy` pyproject.toml requires ≥3.9, so a plain `pip install -e` is blocked):
+
+```bash
+pip install dill==0.3.5.1
+echo "/home/michzeng/diffusion-policy" \
+    > "$CONDA_PREFIX/lib/python3.8/site-packages/diffusion_policy.pth"
+pip install robomimic --no-deps
+pip install einops==0.4.1
+```
+
+After setup, verify with:
+```bash
+python -c "import diffusion_policy; print('OK')"
+```
+
+Then evaluate a checkpoint:
+```bash
+python -m src.eval.evaluate_model_custom \
+    --checkpoint /path/to/checkpoint.ckpt \
+    --furniture one_leg \
+    --n-rollouts 10 \
+    --n-envs 1 \
+```
+
 
 
 ## Installation Instructions

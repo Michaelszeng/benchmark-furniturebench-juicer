@@ -732,42 +732,6 @@ def main():
             p.filter = 1
         env_inner.isaac_gym.set_actor_rigid_shape_properties(env_inner.envs[0], h, props)
 
-    # # Suppress collisions between the gripper body and furniture parts.
-    # # Strategy: set filter=2 on ALL Franka shapes, then clear it back to 0 on
-    # # the two finger links so only fingers can contact parts.
-    # # Parts get bit 2 added (already have bit 1), so:
-    # #   arm/hand shapes (2) & parts (3) = 2 → suppressed ✓
-    # #   finger shapes  (0) & parts (3) = 0 → collide    ✓
-    # # Avoids having to identify panda_hand's exact shape range, which is fragile
-    # # due to the _sc sphere-collision links inflating the body index.
-    # franka_h = env_inner.isaac_gym.find_actor_handle(env_inner.envs[0], "franka")
-    # franka_shape_props = env_inner.isaac_gym.get_actor_rigid_shape_properties(env_inner.envs[0], franka_h)
-    # body_shape_indices = env_inner.isaac_gym.get_actor_rigid_body_shape_indices(env_inner.envs[0], franka_h)
-
-    # # Set filter=2 on every Franka shape.
-    # for p in franka_shape_props:
-    #     p.filter = 2
-
-    # # Clear filter back to 0 for finger shapes so they can contact parts.
-    # for finger_name in ("panda_leftfinger", "panda_rightfinger"):
-    #     finger_body_idx = env_inner.isaac_gym.find_actor_rigid_body_index(
-    #         env_inner.envs[0], franka_h, finger_name, gymapi.DOMAIN_ACTOR
-    #     )
-    #     info = body_shape_indices[finger_body_idx]
-    #     for i in range(info.start, info.start + info.count):
-    #         franka_shape_props[i].filter = 0
-
-    # env_inner.isaac_gym.set_actor_rigid_shape_properties(env_inner.envs[0], franka_h, franka_shape_props)
-
-    # # Add bit 2 to parts so arm/hand–part contact is suppressed.
-    # # (Parts already have bit 1 for obstacle suppression; |=2 preserves that.)
-    # for part in env_inner.furnitures[0].parts:
-    #     h = env_inner.isaac_gym.find_actor_handle(env_inner.envs[0], part.name)
-    #     props = env_inner.isaac_gym.get_actor_rigid_shape_properties(env_inner.envs[0], h)
-    #     for p in props:
-    #         p.filter |= 2
-    #     env_inner.isaac_gym.set_actor_rigid_shape_properties(env_inner.envs[0], h, props)
-
     # Remove gravity from all furniture parts so they stay put during simulate()
     # without needing to be reset every sub-step.
     for part in env_inner.furnitures[0].parts:

@@ -74,7 +74,7 @@ def main():
         display = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
         label = (
-            f"Ep {ep_idx}/{n_episodes - 1}  |  "
+            f"Ep {ep_idx + 1}/{n_episodes}  |  "
             f"Frame {frame_idx}/{len(frames) - 1}  |  "
             f"{'SUCCESS' if success else 'FAILURE'}"
         )

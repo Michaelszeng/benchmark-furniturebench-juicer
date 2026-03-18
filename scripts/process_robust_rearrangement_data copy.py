@@ -251,7 +251,7 @@ def find_finger_split_sim(
     parts_poses_42d: np.ndarray,
     arm_q: np.ndarray,
     pos_target: torch.Tensor,
-    n_steps: int = 300,
+    n_steps: int = 200,
 ):
     """Return (d1, d2) finger DOF positions by simulating gripper closing.
 
@@ -285,7 +285,7 @@ def find_finger_split_sim(
     env_inner.isaac_gym.set_dof_position_target_tensor(env_inner.sim, gymtorch.unwrap_tensor(pos_target))
 
     # Fingers: DOF_MODE_EFFORT — must use actuation force, not position target.
-    closing_torque = -float(sim_config["robot"]["gripper_torque"]) / 4
+    closing_torque = -float(sim_config["robot"]["gripper_torque"]) / 6
     torque_action = torch.zeros_like(env_inner.dof_pos)
 
     for _ in range(n_steps):
@@ -339,20 +339,20 @@ def find_finger_split_sim(
 _FAR_Z = -1000.0
 
 
-def _make_no_collision_urdf(asset_root: str, asset_file: str) -> str:
+def _make_no_collision_urdf(asset_root: str, asset_file: str, links: list = None, suffix: str = "_render") -> str:
     """Return a path (relative to asset_root) for a collision-stripped URDF.
 
-    Parses the original URDF, removes every <collision> element from every
-    <link>, writes the result next to the original with a '_render' suffix,
-    and returns its relative path.  The file is rewritten on every call so
-    it stays up-to-date if the source changes.
+    Parses the original URDF, removes <collision> elements from the specified
+    links (or all links if links=None), writes the result next to the original
+    with the given suffix, and returns its relative path.
     """
     full_path = Path(asset_root) / asset_file
     tree = ET.parse(str(full_path))
     for link in tree.getroot().findall(".//link"):
-        for collision in link.findall("collision"):
-            link.remove(collision)
-    out_path = full_path.with_name(full_path.stem + "_render" + full_path.suffix)
+        if links is None or link.get("name") in links:
+            for collision in link.findall("collision"):
+                link.remove(collision)
+    out_path = full_path.with_name(full_path.stem + suffix + full_path.suffix)
     tree.write(str(out_path))
     return str(out_path.relative_to(Path(asset_root)))
 
@@ -512,8 +512,6 @@ def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path):
     image_access_open = False  # tracks whether start_access_image_tensors is active
 
     for ep_idx, (ep_start, ep_end) in enumerate(zip(episode_starts, episode_ends)):
-        # if ep_idx < 11:
-        #     continue
         print(f"  Episode {ep_idx + 1}/{len(episode_ends)}: frames {ep_start}-{ep_end}")
         current_q = None  # reset IK warm-start at episode boundary
 
@@ -522,8 +520,8 @@ def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path):
             image_access_open = False
 
         for frame_idx in tqdm(range(ep_start, ep_end), leave=False):
-            # if frame_idx - ep_start < 60:
-            #     continue
+            if frame_idx < 100:
+                continue
             rs = robot_state_all[frame_idx]  # (16,)
             parts_poses = parts_poses_all[frame_idx]  # (42,)
 
@@ -682,14 +680,23 @@ def main():
 
     FurnitureSimEnv.create_envs = _create_envs_with_render_copies
 
-    _table_no_col = _make_no_collision_urdf(ASSET_ROOT, "furniture/urdf/table.urdf")
+    # Load Franka with panda_hand collision stripped so the gripper body doesn't
+    # knock parts around during find_finger_split_sim.  Fingers keep their
+    # collision geometry so they still contact parts correctly.
+    _franka_urdf = "franka_description_ros/franka_description/robots/franka_panda.urdf"
+    _franka_no_hand_col = _make_no_collision_urdf(ASSET_ROOT, _franka_urdf, links=["panda_hand"], suffix="_no_hand_col")
 
-    def _import_table_no_collision(self):
+    def _import_franka_no_hand_collision(self):
+        self.franka_asset_file = _franka_no_hand_col
         asset_options = gymapi.AssetOptions()
+        asset_options.armature = 0.01
+        asset_options.thickness = 0.001
         asset_options.fix_base_link = True
-        return self.isaac_gym.load_asset(self.sim, ASSET_ROOT, _table_no_col, asset_options)
+        asset_options.disable_gravity = True
+        asset_options.flip_visual_attachments = True
+        return self.isaac_gym.load_asset(self.sim, ASSET_ROOT, _franka_no_hand_col, asset_options)
 
-    FurnitureSimEnv._import_table_asset = _import_table_no_collision
+    FurnitureSimEnv._import_franka_asset = _import_franka_no_hand_collision
 
     print(f"Creating env (furniture={args.furniture}, gpu={args.gpu_id}, ctrl_mode=diffik, headless={args.headless})")
     env = gym.make(
@@ -731,42 +738,6 @@ def main():
         for p in props:
             p.filter = 1
         env_inner.isaac_gym.set_actor_rigid_shape_properties(env_inner.envs[0], h, props)
-
-    # # Suppress collisions between the gripper body and furniture parts.
-    # # Strategy: set filter=2 on ALL Franka shapes, then clear it back to 0 on
-    # # the two finger links so only fingers can contact parts.
-    # # Parts get bit 2 added (already have bit 1), so:
-    # #   arm/hand shapes (2) & parts (3) = 2 → suppressed ✓
-    # #   finger shapes  (0) & parts (3) = 0 → collide    ✓
-    # # Avoids having to identify panda_hand's exact shape range, which is fragile
-    # # due to the _sc sphere-collision links inflating the body index.
-    # franka_h = env_inner.isaac_gym.find_actor_handle(env_inner.envs[0], "franka")
-    # franka_shape_props = env_inner.isaac_gym.get_actor_rigid_shape_properties(env_inner.envs[0], franka_h)
-    # body_shape_indices = env_inner.isaac_gym.get_actor_rigid_body_shape_indices(env_inner.envs[0], franka_h)
-
-    # # Set filter=2 on every Franka shape.
-    # for p in franka_shape_props:
-    #     p.filter = 2
-
-    # # Clear filter back to 0 for finger shapes so they can contact parts.
-    # for finger_name in ("panda_leftfinger", "panda_rightfinger"):
-    #     finger_body_idx = env_inner.isaac_gym.find_actor_rigid_body_index(
-    #         env_inner.envs[0], franka_h, finger_name, gymapi.DOMAIN_ACTOR
-    #     )
-    #     info = body_shape_indices[finger_body_idx]
-    #     for i in range(info.start, info.start + info.count):
-    #         franka_shape_props[i].filter = 0
-
-    # env_inner.isaac_gym.set_actor_rigid_shape_properties(env_inner.envs[0], franka_h, franka_shape_props)
-
-    # # Add bit 2 to parts so arm/hand–part contact is suppressed.
-    # # (Parts already have bit 1 for obstacle suppression; |=2 preserves that.)
-    # for part in env_inner.furnitures[0].parts:
-    #     h = env_inner.isaac_gym.find_actor_handle(env_inner.envs[0], part.name)
-    #     props = env_inner.isaac_gym.get_actor_rigid_shape_properties(env_inner.envs[0], h)
-    #     for p in props:
-    #         p.filter |= 2
-    #     env_inner.isaac_gym.set_actor_rigid_shape_properties(env_inner.envs[0], h, props)
 
     # Remove gravity from all furniture parts so they stay put during simulate()
     # without needing to be reset every sub-step.

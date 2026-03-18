@@ -1,12 +1,11 @@
 """Evaluate a diffusion_policy checkpoint on FurnitureBench simulation.
 
 Usage:
-    conda run -n imitation-juicer python -m src.eval.evaluate_model_custom \
+    python src/eval/evaluate_model_custom.py \
         --checkpoint /path/to/checkpoint.ckpt \
         --furniture one_leg \
         --n-rollouts 10 \
-        --n-envs 1 \
-        --headless
+        --n-envs 1
 """
 
 import argparse
@@ -24,7 +23,6 @@ from torchvision.transforms import InterpolationMode
 
 from src.common.geometry import proprioceptive_quat_to_6d_rotation
 from src.common.tasks import task_timeout
-
 
 # Register the "eval" resolver used in diffusion_policy configs.
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -49,9 +47,7 @@ def preprocess_obs(obs: dict, device: torch.device) -> dict:
     """
     img1 = preprocess_images(obs["color_image1"]).to(device)
     img2 = preprocess_images(obs["color_image2"]).to(device)
-    robot_state = proprioceptive_quat_to_6d_rotation(
-        obs["robot_state"].float().to(device)
-    )
+    robot_state = proprioceptive_quat_to_6d_rotation(obs["robot_state"].float().to(device))
     return {"color_image1": img1, "color_image2": img2, "robot_state": robot_state}
 
 
@@ -62,14 +58,11 @@ def build_obs_dict(obs_deque: collections.deque, device: torch.device) -> dict:
     Returns {"obs": {key: (n_envs, T_obs, ...)}} on ``device``.
     """
     keys = obs_deque[0].keys()
-    obs_stacked = {
-        k: torch.stack([o[k] for o in obs_deque], dim=1)
-        for k in keys
-    }
+    obs_stacked = {k: torch.stack([o[k] for o in obs_deque], dim=1) for k in keys}
     return {"obs": obs_stacked}
 
 
-def load_policy(checkpoint_path: str, device: torch.device):
+def load_policy(checkpoint_path: str, device: torch.device, normalizer_override: str = None):
     """Load a diffusion_policy workspace + policy from a .ckpt file.
 
     Also loads (or generates) the paired normalizer.pt that lives next to the
@@ -94,7 +87,10 @@ def load_policy(checkpoint_path: str, device: torch.device):
     # --- normalizer ---
     ckpt_path = Path(checkpoint_path)
     normalizer_path = ckpt_path.parent.parent / "normalizer.pt"
-    if normalizer_path.exists():
+    if normalizer_override is not None:
+        print(f"Loading normalizer from {normalizer_override}")
+        normalizer = torch.load(normalizer_override)
+    elif normalizer_path.exists():
         print(f"Loading normalizer from {normalizer_path}")
         normalizer = torch.load(normalizer_path)
     else:
@@ -120,9 +116,7 @@ def run_rollout(
     """Run one round of parallel rollouts.  Returns bool array (n_envs,)."""
     obs = env.reset()
     preprocessed = preprocess_obs(obs, device)
-    obs_deque = collections.deque(
-        [preprocessed] * n_obs_steps, maxlen=n_obs_steps
-    )
+    obs_deque = collections.deque([preprocessed] * n_obs_steps, maxlen=n_obs_steps)
     action_queue: collections.deque = collections.deque()
 
     done = torch.zeros((env.num_envs, 1), dtype=torch.bool, device="cuda")
@@ -151,33 +145,35 @@ def run_rollout(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Evaluate a diffusion_policy checkpoint on FurnitureBench."
-    )
+    parser = argparse.ArgumentParser(description="Evaluate a diffusion_policy checkpoint on FurnitureBench.")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to .ckpt file")
     parser.add_argument(
-        "--furniture", "-f", type=str, required=True,
+        "--furniture",
+        "-f",
+        type=str,
+        required=True,
         choices=["one_leg", "lamp", "round_table", "desk", "square_table", "cabinet", "chair", "stool"],
     )
     parser.add_argument("--n-rollouts", type=int, default=10)
     parser.add_argument("--n-envs", type=int, default=1)
     parser.add_argument("--randomness", type=str, default="low")
+    parser.add_argument("--normalizer", type=str, default=None, help="Path to normalizer.pt (overrides auto-discovery)")
     parser.add_argument("--device", type=str, default="cuda:0")
-    parser.add_argument("--headless", action="store_true", default=True)
+    parser.add_argument("--headless", action="store_true", default=False)
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     args = parser.parse_args()
 
     device = torch.device(args.device)
 
     print(f"Loading policy from {args.checkpoint}")
-    policy, cfg = load_policy(args.checkpoint, device)
+    policy, cfg = load_policy(args.checkpoint, device, normalizer_override=args.normalizer)
     n_obs_steps: int = int(cfg.n_obs_steps)
     print(f"n_obs_steps={n_obs_steps}, furniture={args.furniture}, n_envs={args.n_envs}")
 
     rollout_max_steps = task_timeout(args.furniture)
     print(f"Creating env (furniture={args.furniture}, max_steps={rollout_max_steps})")
     env = gym.make(
-        "FurnitureSimFull-v0",
+        "FurnitureSim-v0",
         furniture=args.furniture,
         max_env_steps=rollout_max_steps,
         headless=args.headless,
@@ -188,6 +184,7 @@ if __name__ == "__main__":
         action_type="delta",
         ctrl_mode="osc",
         randomness=args.randomness,
+        concat_robot_state=True,
     )
 
     n_success = 0
@@ -205,11 +202,7 @@ if __name__ == "__main__":
         n_success += int(success.sum())
         n_total += args.n_envs
         rate = n_success / n_total
-        print(
-            f"Round {i + 1}/{n_rounds}: "
-            f"success={success.tolist()}  "
-            f"running {n_success}/{n_total} ({rate:.1%})"
-        )
+        print(f"Round {i + 1}/{n_rounds}: success={success.tolist()}  running {n_success}/{n_total} ({rate:.1%})")
 
     final_rate = n_success / n_total
     print(f"\nFinal success rate: {n_success}/{n_total} ({final_rate:.1%})")

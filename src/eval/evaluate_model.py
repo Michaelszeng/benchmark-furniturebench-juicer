@@ -8,6 +8,7 @@ import wandb
 from furniture_bench.envs.furniture_sim_env import FurnitureSimEnv
 from ipdb import set_trace as bp  # noqa
 from omegaconf import DictConfig, OmegaConf
+from src.gym import get_env
 from wandb import Api
 from wandb.sdk.wandb_run import Run
 
@@ -17,7 +18,6 @@ from src.common.files import trajectory_save_dir
 from src.common.tasks import furniture2idx, task_timeout
 from src.dataset import get_normalizer
 from src.eval.rollout import calculate_success_rate
-from src.gym import get_env
 
 api = Api()
 

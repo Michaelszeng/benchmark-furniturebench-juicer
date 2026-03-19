@@ -285,7 +285,7 @@ def find_finger_split_sim(
     env_inner.isaac_gym.set_dof_position_target_tensor(env_inner.sim, gymtorch.unwrap_tensor(pos_target))
 
     # Fingers: DOF_MODE_EFFORT — must use actuation force, not position target.
-    closing_torque = -float(sim_config["robot"]["gripper_torque"]) / 4
+    closing_torque = -float(sim_config["robot"]["gripper_torque"]) / 5
     torque_action = torch.zeros_like(env_inner.dof_pos)
 
     for _ in range(n_steps):
@@ -480,19 +480,41 @@ def copy_zarr_skeleton(src: zarr.Group, dst: zarr.Group, skip=("color_image1", "
 # ---------------------------------------------------------------------------
 
 
-def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path):
+def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path, episodes=None):
+    """Process a zarr dataset, re-rendering images with AprilTags.
+
+    Args:
+        episodes: Optional list of episode indices (1-indexed) to reprocess.  All
+            other episodes are left untouched.  Requires the output zarr to
+            already exist (i.e. a full run must have been completed first).
+            If None, all episodes are processed and the output zarr is
+            created/overwritten from scratch.
+    """
     src = zarr.open(str(input_zarr_path), mode="r")
     T = src["robot_state"].shape[0]
     H, W, C = 240, 320, 3
 
     output_zarr_path.mkdir(parents=True, exist_ok=True)
-    dst = zarr.open(str(output_zarr_path), mode="w")
 
-    copy_zarr_skeleton(src, dst)
-
-    chunk_t = min(256, T)
-    dst_img1 = dst.zeros("color_image1", shape=(T, H, W, C), chunks=(chunk_t, H, W, C), dtype=np.uint8)
-    dst_img2 = dst.zeros("color_image2", shape=(T, H, W, C), chunks=(chunk_t, H, W, C), dtype=np.uint8)
+    if episodes is not None:
+        # Partial update: output zarr must already exist.
+        if not (output_zarr_path / ".zgroup").exists():
+            raise FileNotFoundError(
+                f"Output zarr does not exist yet: {output_zarr_path}\n"
+                "Run without --episodes first to create it, then re-run with --episodes to patch specific episodes."
+            )
+        dst = zarr.open(str(output_zarr_path), mode="a")
+        dst_img1 = dst["color_image1"]
+        dst_img2 = dst["color_image2"]
+        episodes_set = {ep - 1 for ep in episodes}  # convert 1-indexed → 0-based
+        print(f"  Partial update: reprocessing {len(episodes_set)} episode(s): {sorted(ep + 1 for ep in episodes_set)}")
+    else:
+        dst = zarr.open(str(output_zarr_path), mode="w")
+        copy_zarr_skeleton(src, dst)
+        chunk_t = min(256, T)
+        dst_img1 = dst.zeros("color_image1", shape=(T, H, W, C), chunks=(chunk_t, H, W, C), dtype=np.uint8)
+        dst_img2 = dst.zeros("color_image2", shape=(T, H, W, C), chunks=(chunk_t, H, W, C), dtype=np.uint8)
+        episodes_set = None
 
     env_inner = env.unwrapped
 
@@ -506,14 +528,37 @@ def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path):
     robot_state_all = src["robot_state"][:]  # (T, 16) float32
     parts_poses_all = src["parts_poses"][:]  # (T, 42) float32
 
+    # Fix occasional AprilTag 180° flip outliers in parts_poses.
+    # At 10 Hz, no part should rotate more than ~90° between consecutive frames.
+    # A flip produces a quaternion jump of exactly 180°, i.e. |q1·q2| ≈ 0.
+    # We scan each episode per-part and replace outlier frames with the previous
+    # frame's quaternion.  This is done per-episode so episode boundaries never
+    # "bleed" into each other.
+    n_parts = parts_poses_all.shape[1] // 7  # should be 6 for one_leg
+    FLIP_DOT_THRESHOLD = 0.5  # |q1·q2| < 0.5 → relative angle > ~120°; flip
+    n_flips_fixed = 0
+    for ep_start, ep_end in zip(episode_starts, episode_ends):
+        for part_idx in range(n_parts):
+            q_slice = slice(part_idx * 7 + 3, part_idx * 7 + 7)
+            for frame_idx in range(ep_start + 1, ep_end):
+                q_prev = parts_poses_all[frame_idx - 1, q_slice]
+                q_curr = parts_poses_all[frame_idx, q_slice]
+                dot = abs(float(np.dot(q_prev, q_curr)))
+                if dot < FLIP_DOT_THRESHOLD:
+                    parts_poses_all[frame_idx, q_slice] = q_prev
+                    n_flips_fixed += 1
+    if n_flips_fixed:
+        print(f"  [flip-fix] Corrected {n_flips_fixed} AprilTag orientation outlier(s) in parts_poses")
+
     # Shared position-target tensor reused across frames.
     pos_target = torch.zeros_like(env_inner.dof_pos)
 
     image_access_open = False  # tracks whether start_access_image_tensors is active
 
     for ep_idx, (ep_start, ep_end) in enumerate(zip(episode_starts, episode_ends)):
-        # if ep_idx < 11:
-        #     continue
+        if episodes_set is not None and ep_idx not in episodes_set:
+            continue
+
         print(f"  Episode {ep_idx + 1}/{len(episode_ends)}: frames {ep_start}-{ep_end}")
         current_q = None  # reset IK warm-start at episode boundary
 
@@ -611,6 +656,18 @@ def main():
         "--headless",
         action="store_true",
         help="Open a viewer window so you can watch the simulation in real time.",
+    )
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        nargs="+",
+        default=None,
+        metavar="EP",
+        help=(
+            "1-indexed episode indices to reprocess (e.g. --episodes 3 7 12). "
+            "All other episodes are left untouched. "
+            "The output zarr must already exist."
+        ),
     )
     args = parser.parse_args()
 
@@ -741,7 +798,7 @@ def main():
             p.flags |= gymapi.RIGID_BODY_DISABLE_GRAVITY
         env_inner.isaac_gym.set_actor_rigid_body_properties(env_inner.envs[0], h, props, recomputeInertia=False)
 
-    process_zarr(env, input_dir, output_dir)
+    process_zarr(env, input_dir, output_dir, episodes=args.episodes)
     print("Done.")
 
 

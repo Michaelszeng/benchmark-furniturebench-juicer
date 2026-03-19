@@ -10,11 +10,17 @@ Usage:
 
 import argparse
 import collections
+import csv
+import datetime
+import math
+import pickle
+import time
 from pathlib import Path
 
 import dill
 import furniture_bench  # noqa: F401 — registers FurnitureSim envs
 import gym
+import imageio
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
@@ -29,10 +35,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 
 def preprocess_images(imgs: torch.Tensor) -> torch.Tensor:
-    """Convert (B, H, W, 3) uint8 → (B, 3, 224, 224) float [0, 1].
-
-    Applies to both color_image1 and color_image2.
-    """
+    """Convert (B, H, W, 3) uint8 → (B, 3, 224, 224) float [0, 1]."""
     imgs = imgs.float() / 255.0
     imgs = imgs.permute(0, 3, 1, 2)  # (B, H, W, 3) -> (B, 3, H, W)
     imgs = TF.resize(imgs, [224, 224], interpolation=InterpolationMode.BILINEAR, antialias=True)
@@ -105,6 +108,13 @@ def load_policy(checkpoint_path: str, device: torch.device, normalizer_override:
     return policy, cfg
 
 
+def _write_mp4(frames: list, path: Path, fps: int = 10) -> None:
+    """Write a list of (H, W, 3) uint8 numpy frames to an MP4 file."""
+    with imageio.get_writer(path, fps=fps, codec="libx264", pixelformat="yuv420p") as writer:
+        for frame in frames:
+            writer.append_data(frame)
+
+
 @torch.no_grad()
 def run_rollout(
     env,
@@ -112,36 +122,87 @@ def run_rollout(
     n_obs_steps: int,
     rollout_max_steps: int,
     device: torch.device,
-) -> np.ndarray:
-    """Run one round of parallel rollouts.  Returns bool array (n_envs,)."""
+    record_video: bool = False,
+    n_action_steps: int = None,
+) -> dict:
+    """Run one round of parallel rollouts.
+
+    Returns a dict with per-env arrays:
+        success      (n_envs,) bool
+        total_reward (n_envs,) float
+        result       (n_envs,) str — "success", "timeout", or "failure"
+        steps        int — total steps executed this round
+        frames       (n_envs,) list[np.ndarray] — only present if record_video=True;
+                     each element is a list of (H, W*2, 3) uint8 frames (cam1 | cam2)
+    """
+    n_envs = env.num_envs
     obs = env.reset()
     preprocessed = preprocess_obs(obs, device)
     obs_deque = collections.deque([preprocessed] * n_obs_steps, maxlen=n_obs_steps)
     action_queue: collections.deque = collections.deque()
 
-    done = torch.zeros((env.num_envs, 1), dtype=torch.bool, device="cuda")
-    total_reward = torch.zeros(env.num_envs, device="cuda")
+    done = torch.zeros((n_envs, 1), dtype=torch.bool, device=device)
+    total_reward = torch.zeros(n_envs, device=device)
+    # Track the step at which each env first became done (-1 = never done).
+    done_step = torch.full((n_envs,), -1, dtype=torch.long, device=device)
     step = 0
+
+    # Per-env frame buffers: list of lists of (H, W*2, 3) uint8 numpy arrays.
+    if record_video:
+        frame_buffers = [[] for _ in range(n_envs)]
 
     while not done.all() and step < rollout_max_steps:
         if len(action_queue) == 0:
             obs_dict = build_obs_dict(obs_deque, device)
             result = policy.predict_action(obs_dict, use_DDIM=True)
-            # result["action"]: (n_envs, n_action_steps, action_dim)
             actions = result["action"]
-            for t in range(actions.shape[1]):
-                action_queue.append(actions[:, t, :])  # (n_envs, action_dim)
+            n_steps = n_action_steps if n_action_steps is not None else actions.shape[1]
+            for t in range(n_steps):
+                action_queue.append(actions[:, t, :])
 
-        action = action_queue.popleft()  # (n_envs, action_dim)
+        action = action_queue.popleft()
         obs, reward, done, _ = env.step(action)
         total_reward += reward.squeeze(-1).float()
+
+        # Record when each env finishes for the first time.
+        newly_done = done.squeeze(-1) & (done_step == -1)
+        done_step[newly_done] = step
+
+        if record_video:
+            # obs images are (n_envs, H, W, 3) uint8 tensors on GPU.
+            imgs1 = obs["color_image1"].cpu().numpy()  # (n_envs, H, W, 3)
+            imgs2 = obs["color_image2"].cpu().numpy()
+            for env_idx in range(n_envs):
+                side_by_side = np.concatenate([imgs1[env_idx], imgs2[env_idx]], axis=1)
+                frame_buffers[env_idx].append(side_by_side)
+
         preprocessed = preprocess_obs(obs, device)
         obs_deque.append(preprocessed)
         step += 1
 
     n_parts = len(env.furniture.should_be_assembled)
-    success = (total_reward >= n_parts).cpu().numpy()
-    return success
+    success_mask = (total_reward >= n_parts).cpu().numpy()
+    done_step_np = done_step.cpu().numpy()
+
+    results = []
+    for env_idx in range(n_envs):
+        if success_mask[env_idx]:
+            results.append("success")
+        elif done_step_np[env_idx] == -1:
+            # Never went done — ran out of steps.
+            results.append("timeout")
+        else:
+            results.append("failure")
+
+    out = {
+        "success": success_mask,
+        "total_reward": total_reward.cpu().numpy(),
+        "result": results,
+        "steps": step,
+    }
+    if record_video:
+        out["frames"] = frame_buffers
+    return out
 
 
 if __name__ == "__main__":
@@ -161,6 +222,17 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--headless", action="store_true", default=False)
     parser.add_argument("--no-headless", dest="headless", action="store_false")
+    parser.add_argument("--save-video", action="store_true", default=True)
+    parser.add_argument("--no-save-video", dest="save_video", action="store_false")
+    parser.add_argument(
+        "--n-action-steps",
+        type=int,
+        default=None,
+        help="Override action horizon (default: use value from checkpoint config)",
+    )
+    parser.add_argument(
+        "--output-dir", type=str, default=None, help="Directory to write results (default: outputs/<date>/<time>)"
+    )
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -168,7 +240,10 @@ if __name__ == "__main__":
     print(f"Loading policy from {args.checkpoint}")
     policy, cfg = load_policy(args.checkpoint, device, normalizer_override=args.normalizer)
     n_obs_steps: int = int(cfg.n_obs_steps)
-    print(f"n_obs_steps={n_obs_steps}, furniture={args.furniture}, n_envs={args.n_envs}")
+    n_action_steps: int = args.n_action_steps  # None means use the value from the checkpoint config
+    print(
+        f"n_obs_steps={n_obs_steps}, n_action_steps={'from_cfg' if n_action_steps is None else n_action_steps}, furniture={args.furniture}, n_envs={args.n_envs}"
+    )
 
     rollout_max_steps = task_timeout(args.furniture)
     print(f"Creating env (furniture={args.furniture}, max_steps={rollout_max_steps})")
@@ -187,22 +262,87 @@ if __name__ == "__main__":
         concat_robot_state=True,
     )
 
+    # --- output directory ---
+    if args.output_dir is not None:
+        out_dir = Path(args.output_dir)
+    else:
+        now = datetime.datetime.now()
+        out_dir = Path("outputs") / now.strftime("%Y-%m-%d") / now.strftime("%H-%M-%S")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     n_success = 0
     n_total = 0
-    n_rounds = max(1, args.n_rollouts // args.n_envs)
+    n_rounds = max(1, math.ceil(args.n_rollouts / args.n_envs))
+    all_trial_records = []  # list of dicts, one per env per round
+
+    csv_path = out_dir / "results.csv"
+    csv_fields = ["trial", "result", "reward", "trial_time"]
+    csv_file = open(csv_path, "w", newline="")
+    csv_writer = csv.DictWriter(csv_file, fieldnames=csv_fields)
+    csv_writer.writeheader()
+    csv_file.flush()
 
     for i in range(n_rounds):
-        success = run_rollout(
+        t_start = time.time()
+        round_result = run_rollout(
             env=env,
             policy=policy,
             n_obs_steps=n_obs_steps,
             rollout_max_steps=rollout_max_steps,
             device=device,
+            record_video=args.save_video,
+            n_action_steps=n_action_steps,
         )
-        n_success += int(success.sum())
-        n_total += args.n_envs
+        wall_time = time.time() - t_start
+
+        # Stop saving trial records once we reach n_rollouts (so we have exactly n_rollouts records)
+        for env_idx in range(args.n_envs):
+            if n_total >= args.n_rollouts:
+                break
+            trial_num = n_total + 1
+            result_str = round_result["result"][env_idx]
+            record = {
+                "trial": trial_num,
+                "result": result_str,
+                "reward": float(round_result["total_reward"][env_idx]),
+                "trial_time": wall_time,
+            }
+            all_trial_records.append(record)
+            n_success += int(round_result["success"][env_idx])
+            n_total += 1
+
+            csv_writer.writerow(record)
+            csv_file.flush()
+
+            if args.save_video:
+                video_path = out_dir / f"trial_{trial_num:04d}_{result_str}.mp4"
+                _write_mp4(round_result["frames"][env_idx], video_path)
+                print(f"  Saved video: {video_path.name}")
+
         rate = n_success / n_total
-        print(f"Round {i + 1}/{n_rounds}: success={success.tolist()}  running {n_success}/{n_total} ({rate:.1%})")
+        print(f"Round {i + 1}/{n_rounds}: result={round_result['result']}  running {n_success}/{n_total} ({rate:.1%})")
+
+    csv_file.close()
 
     final_rate = n_success / n_total
     print(f"\nFinal success rate: {n_success}/{n_total} ({final_rate:.1%})")
+
+    # --- write pickle ---
+    pkl_path = out_dir / "results.pkl"
+    with open(pkl_path, "wb") as f:
+        pickle.dump(
+            {
+                "trials": all_trial_records,
+                "n_success": n_success,
+                "n_total": n_total,
+                "success_rate": final_rate,
+                "checkpoint": args.checkpoint,
+                "furniture": args.furniture,
+                "randomness": args.randomness,
+                "n_obs_steps": n_obs_steps,
+                "rollout_max_steps": rollout_max_steps,
+            },
+            f,
+        )
+
+    print(f"Results written to {out_dir}/")

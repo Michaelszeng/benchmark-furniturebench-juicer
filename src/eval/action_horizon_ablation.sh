@@ -19,7 +19,7 @@ N_ROLLOUTS=500
 if [[ -f "${CHECKPOINT_PATH}" ]]; then
     CHECKPOINTS=("${CHECKPOINT_PATH}")
 elif [[ -d "${CHECKPOINT_PATH}" ]]; then
-    mapfile -t CHECKPOINTS < <(find "${CHECKPOINT_PATH}" -maxdepth 1 -name "*.ckpt" | sort)
+    mapfile -t CHECKPOINTS < <(find "${CHECKPOINT_PATH}" -maxdepth 1 -name "*.ckpt" ! -name "latest.ckpt" | sort)
     if [[ ${#CHECKPOINTS[@]} -eq 0 ]]; then
         echo "No .ckpt files found in ${CHECKPOINT_PATH}" >&2
         exit 1

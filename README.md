@@ -53,13 +53,13 @@ python scripts/process_robust_rearrangement_data.py \
 
 Convert `zarr` to diffusion policy format (`<source_zarr_name>_translated/zarr`):
 ```bash
-python src/data_processing/process_zarr.py dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success.zarr \
-    --output dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success_translated.zarr
+python src/data_processing/process_zarr.py <PATH>.zarr \
+    --output <PATH>_translated.zarr
 ```
 
 #### Dataset Visualization
 ```bash
-python scripts/visualize_dataset.py dataset/processed/diffik/sim/one_leg/teleop/low/success_processed.zarr
+python scripts/visualize_dataset.py <PATH>.zarr
 ```
 
 
@@ -85,15 +85,23 @@ Then evaluate a checkpoint:
 ```bash
 python -m src.eval.evaluate_model_custom \
     --checkpoint /path/to/checkpoint.ckpt \
-    --furniture one_leg \
+    --furniture FURNITURE \
     --n-rollouts 10 \
     --n-envs 1 \
 ```
 
+#### Full Action Horizon Ablations
+Replace `N` with the number of parallel environments your hardware can handle:
+```bash
+./src/eval/action_horizon_ablation.sh <PATH-TO-CKPT-DIR> one_leg N
+```
+
+This runs all checkpoints on all action horizons `[1,2,3,4,6,7,8,10,12,15]`, 500 trials for each combination, and logs the results.
+
+
 
 
 ## Installation Instructions
-
 
 ### Install Conda
 

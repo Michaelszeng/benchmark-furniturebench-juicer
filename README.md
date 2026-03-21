@@ -99,6 +99,17 @@ Replace `N` with the number of parallel environments your hardware can handle:
 This runs all checkpoints on all action horizons `[1,2,3,4,6,7,8,10,12,15]`, 500 trials for each combination, and logs the results.
 
 
+### Setting up on MIT CSAIL SLURM Cluster
+
+Follow the same installation steps as below, except:
+
+1. Create conda environment:
+```bash
+conda create -n py38 python=3.8 -y
+conda activate py38
+```
+
+2. Since we do not have browser access on the cluster, download Isaac Gym on another device and use `scp`/`rsync` to send it to the cluster.
 
 
 ## Installation Instructions

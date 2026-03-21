@@ -115,6 +115,20 @@ def _write_mp4(frames: list, path: Path, fps: int = 10) -> None:
             writer.append_data(frame)
 
 
+def _write_summary(n_success: int, n_total: int, trial_records: list, summary_path: Path = "summary.txt") -> None:
+    n_failure = sum(1 for r in trial_records if r["result"] == "failure")
+    n_timeout = sum(1 for r in trial_records if r["result"] == "timeout")
+    rate = n_success / n_total if n_total > 0 else 0.0
+    avg_time = sum(r["trial_time"] for r in trial_records) / len(trial_records) if trial_records else 0.0
+    with open(summary_path, "w") as f:
+        f.write(f"Trials completed : {n_total} / {args.n_rollouts}\n")
+        f.write(f"Successes        : {n_success}\n")
+        f.write(f"Failures         : {n_failure}\n")
+        f.write(f"Timeouts         : {n_timeout}\n")
+        f.write(f"Success rate     : {rate:.1%}\n")
+        f.write(f"Avg trial time   : {avg_time:.1f}s\n")
+
+
 @torch.no_grad()
 def run_rollout(
     env,
@@ -282,6 +296,8 @@ if __name__ == "__main__":
     csv_writer.writeheader()
     csv_file.flush()
 
+    summary_path = out_dir / "summary.txt"
+
     for i in range(n_rounds):
         t_start = time.time()
         round_result = run_rollout(
@@ -313,6 +329,7 @@ if __name__ == "__main__":
 
             csv_writer.writerow(record)
             csv_file.flush()
+            _write_summary(n_success, n_total, all_trial_records, summary_path)
 
             if args.save_video:
                 video_path = out_dir / f"trial_{trial_num:04d}_{result_str}.mp4"

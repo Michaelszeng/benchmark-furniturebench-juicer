@@ -12,6 +12,8 @@ artifacts/
 *.pth
 *.pkl.xz
 training-artifacts/
+logs/
+.isaacgym/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

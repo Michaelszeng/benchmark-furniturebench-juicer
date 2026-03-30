@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=40
-#SBATCH --mem=384G
+#SBATCH --mem=128G
 #SBATCH --time=48:00:00
 #SBATCH --output=logs/slurm-%j.out
 #SBATCH --error=logs/slurm-%j.err
@@ -23,9 +23,11 @@
 # ============================================================================
 # Evaluation parameters
 # ============================================================================
-CHECKPOINT_PATH=""   # path to a .ckpt file or a directory of .ckpt files
+# path to a .ckpt file or a directory of .ckpt files
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints"
+CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_teleop/checkpoints"
 FURNITURE="one_leg"
-N_ENVS=1
+N_ENVS=64
 N_ROLLOUTS=500
 # ============================================================================
 
@@ -49,6 +51,13 @@ mkdir -p logs
 
 
 export PYTHONPATH=$PWD:$PYTHONPATH
+
+export HOME=/data/locomotion/michzeng
+
+# IsaacGym's native extension links against libpython3.8.so.1.0 at the C level.
+# The conda activate step does not add the env's lib/ to LD_LIBRARY_PATH, so the
+# dynamic linker can't find the library unless we set it explicitly.
+export LD_LIBRARY_PATH=/data/locomotion/michzeng/mamba/envs/py38/lib:${LD_LIBRARY_PATH:-}
 
 echo "CHECKPOINT_PATH: $CHECKPOINT_PATH"
 echo "FURNITURE:       $FURNITURE"
@@ -98,6 +107,6 @@ for CHECKPOINT in "${CHECKPOINTS[@]}"; do
             --n-envs "${N_ENVS}" \
             --n-action-steps "${N_ACTION_STEPS}" \
             --output-dir "${OUT_DIR}" \
-            --headless
+            --headless || { echo "ERROR: evaluate_model_custom.py failed (exit $?) for action_horizon=${N_ACTION_STEPS}, checkpoint=${CKPT_STEM}" >&2; continue; }
     done
 done

@@ -74,6 +74,7 @@ echo "/home/michzeng/diffusion-policy" \
     > "$CONDA_PREFIX/lib/python3.8/site-packages/diffusion_policy.pth"
 pip install robomimic --no-deps
 pip install einops==0.4.1
+pip install pandas
 ```
 
 After setup, verify with:
@@ -110,6 +111,11 @@ conda activate py38
 ```
 
 2. Since we do not have browser access on the cluster, download Isaac Gym on another device and use `scp`/`rsync` to send it to the cluster.
+
+3. Ensure you follow the **Evaluating a diffusion_policy Checkpoint** instructions above as well.
+
+
+
 
 
 ## Installation Instructions

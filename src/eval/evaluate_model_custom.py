@@ -13,6 +13,7 @@ import collections
 import csv
 import datetime
 import math
+import os
 import pickle
 import time
 from pathlib import Path
@@ -81,9 +82,30 @@ def load_policy(checkpoint_path: str, device: torch.device, normalizer_override:
     payload = torch.load(open(checkpoint_path, "rb"), pickle_module=dill)
     cfg = payload["cfg"]
 
+    # TEMPORARY FIX
+    # Checkpoints saved with DataParallel have every key prefixed with "module.".
+    # Strip it so the state dict aligns with a plain (non-wrapped) model.
+    # Also drop training-only submodule keys (e.g. mask_generator) that are not
+    # part of the inference-time policy architecture.
+    _INFERENCE_ONLY_DROP_PREFIXES = ("mask_generator.",)
+    if "state_dicts" in payload:
+        for sd_key, sd in payload["state_dicts"].items():
+            if any(k.startswith("module.") for k in sd):
+                sd = {
+                    (k[len("module."):] if k.startswith("module.") else k): v
+                    for k, v in sd.items()
+                }
+            payload["state_dicts"][sd_key] = {
+                k: v for k, v in sd.items()
+                if not any(k.startswith(pfx) for pfx in _INFERENCE_ONLY_DROP_PREFIXES)
+            }
+    # END TEMPORARY FIX
+
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)
-    workspace.load_payload(payload, exclude_keys=None, include_keys=None)
+    # Exclude optimizer/scheduler state: not needed for inference, and optimizer
+    # param-group sizes from DataParallel training don't match the unwrapped model.
+    workspace.load_payload(payload, exclude_keys=["optimizer", "lr_scheduler"], include_keys=None)
 
     policy = workspace.ema_model if cfg.training.use_ema else workspace.model
 
@@ -119,14 +141,14 @@ def _write_summary(n_success: int, n_total: int, trial_records: list, summary_pa
     n_failure = sum(1 for r in trial_records if r["result"] == "failure")
     n_timeout = sum(1 for r in trial_records if r["result"] == "timeout")
     rate = n_success / n_total if n_total > 0 else 0.0
-    avg_time = sum(r["trial_time"] for r in trial_records) / len(trial_records) if trial_records else 0.0
+    avg_steps = sum(r["trial_time"] for r in trial_records) / len(trial_records) if trial_records else 0.0
     with open(summary_path, "w") as f:
         f.write(f"Trials completed : {n_total} / {args.n_rollouts}\n")
         f.write(f"Successes        : {n_success}\n")
         f.write(f"Failures         : {n_failure}\n")
         f.write(f"Timeouts         : {n_timeout}\n")
         f.write(f"Success rate     : {rate:.1%}\n")
-        f.write(f"Avg trial time   : {avg_time:.1f}s\n")
+        f.write(f"Avg trial steps  : {avg_steps:.1f}\n")
 
 
 @torch.no_grad()
@@ -208,11 +230,16 @@ def run_rollout(
         else:
             results.append("failure")
 
+    # Per-env step count: how many steps each individual trial ran.
+    # done_step == -1 means the env never signalled done (timeout), so it ran for all steps.
+    steps_per_env = np.where(done_step_np >= 0, done_step_np + 1, step)
+
     out = {
         "success": success_mask,
         "total_reward": total_reward.cpu().numpy(),
         "result": results,
         "steps": step,
+        "steps_per_env": steps_per_env,
     }
     if record_video:
         out["frames"] = frame_buffers
@@ -283,6 +310,9 @@ if __name__ == "__main__":
         now = datetime.datetime.now()
         out_dir = Path("outputs") / now.strftime("%Y-%m-%d") / now.strftime("%H-%M-%S")
     out_dir.mkdir(parents=True, exist_ok=True)
+    videos_dir = out_dir / "videos"
+    if args.save_video:
+        videos_dir.mkdir(parents=True, exist_ok=True)
 
     n_success = 0
     n_total = 0
@@ -321,7 +351,7 @@ if __name__ == "__main__":
                 "trial": trial_num,
                 "result": result_str,
                 "reward": float(round_result["total_reward"][env_idx]),
-                "trial_time": wall_time,
+                "trial_time": int(round_result["steps_per_env"][env_idx]),
             }
             all_trial_records.append(record)
             n_success += int(round_result["success"][env_idx])
@@ -332,7 +362,7 @@ if __name__ == "__main__":
             _write_summary(n_success, n_total, all_trial_records, summary_path)
 
             if args.save_video:
-                video_path = out_dir / f"trial_{trial_num:04d}_{result_str}.mp4"
+                video_path = videos_dir / f"trial_{trial_num:04d}_{result_str}.mp4"
                 _write_mp4(round_result["frames"][env_idx], video_path)
                 print(f"  Saved video: {video_path.name}")
 
@@ -363,3 +393,7 @@ if __name__ == "__main__":
         )
 
     print(f"Results written to {out_dir}/")
+
+    # IsaacGym's C++ destructors segfault during normal Python shutdown.
+    # os._exit bypasses all cleanup and exits immediately with a clean code.
+    os._exit(0)

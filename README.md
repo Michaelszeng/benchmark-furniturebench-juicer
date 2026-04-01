@@ -75,6 +75,7 @@ echo "/home/michzeng/diffusion-policy" \
 pip install robomimic --no-deps
 pip install einops==0.4.1
 pip install pandas
+pip install accelerate==0.13.2
 ```
 
 After setup, verify with:

@@ -106,6 +106,7 @@ for CHECKPOINT in "${CHECKPOINTS[@]}"; do
             --n-rollouts "${N_ROLLOUTS}" \
             --n-envs "${N_ENVS}" \
             --n-action-steps "${N_ACTION_STEPS}" \
+            --n-video-trials 20 \
             --output-dir "${OUT_DIR}" \
             --headless || { echo "ERROR: evaluate_model_custom.py failed (exit $?) for action_horizon=${N_ACTION_STEPS}, checkpoint=${CKPT_STEM}" >&2; continue; }
     done

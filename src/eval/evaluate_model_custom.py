@@ -266,6 +266,12 @@ if __name__ == "__main__":
     parser.add_argument("--save-video", action="store_true", default=True)
     parser.add_argument("--no-save-video", dest="save_video", action="store_false")
     parser.add_argument(
+        "--n-video-trials",
+        type=int,
+        default=20,
+        help="Save videos for only the first N trials (default: 20). Set to -1 to save all.",
+    )
+    parser.add_argument(
         "--n-action-steps",
         type=int,
         default=None,
@@ -330,13 +336,15 @@ if __name__ == "__main__":
 
     for i in range(n_rounds):
         t_start = time.time()
+        video_budget = args.n_video_trials if args.n_video_trials >= 0 else args.n_rollouts
+        record_this_round = args.save_video and (n_total < video_budget)
         round_result = run_rollout(
             env=env,
             policy=policy,
             n_obs_steps=n_obs_steps,
             rollout_max_steps=rollout_max_steps,
             device=device,
-            record_video=args.save_video,
+            record_video=record_this_round,
             n_action_steps=n_action_steps,
         )
         wall_time = time.time() - t_start
@@ -361,13 +369,14 @@ if __name__ == "__main__":
             csv_file.flush()
             _write_summary(n_success, n_total, all_trial_records, summary_path)
 
-            if args.save_video:
+            if record_this_round and trial_num <= video_budget:
                 video_path = videos_dir / f"trial_{trial_num:04d}_{result_str}.mp4"
                 _write_mp4(round_result["frames"][env_idx], video_path)
                 print(f"  Saved video: {video_path.name}")
 
         rate = n_success / n_total
-        print(f"Round {i + 1}/{n_rounds}: result={round_result['result']}  running {n_success}/{n_total} ({rate:.1%})")
+        video_tag = "video=on" if record_this_round else "video=off"
+        print(f"Round {i + 1}/{n_rounds} [{video_tag}, {wall_time:.1f}s]: result={round_result['result']}  running {n_success}/{n_total} ({rate:.1%})")
 
     csv_file.close()
 
@@ -396,4 +405,9 @@ if __name__ == "__main__":
 
     # IsaacGym's C++ destructors segfault during normal Python shutdown.
     # os._exit bypasses all cleanup and exits immediately with a clean code.
+    # Flush stdout/stderr first so buffered print output isn't lost (os._exit
+    # skips Python's normal atexit/buffer-flush sequence).
+    import sys
+    sys.stdout.flush()
+    sys.stderr.flush()
     os._exit(0)

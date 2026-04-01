@@ -42,7 +42,7 @@ for CHECKPOINT in "${CHECKPOINTS[@]}"; do
     echo "Checkpoint: ${CKPT_STEM}"
     echo "##########################################"
 
-    for N_ACTION_STEPS in 1 2 3 4 6 7 8 10 12 15; do
+    for N_ACTION_STEPS in 1 2 3 4 5 6 8 10 12 15; do
         OUT_DIR="${BASE_OUT}/T_a_${N_ACTION_STEPS}/${CKPT_STEM}"
         echo "=========================================="
         echo "Action horizon: ${N_ACTION_STEPS}  ->  ${OUT_DIR}"

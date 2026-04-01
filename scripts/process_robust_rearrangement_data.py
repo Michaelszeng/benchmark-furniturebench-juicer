@@ -38,9 +38,25 @@ import torch
 
 from furniture_bench.sim_config import sim_config
 import furniture_bench.utils.transform as _transform
-from src.common.geometry import np_rot_6d_to_isaac_quat
+from src.common.geometry import np_rot_6d_to_isaac_quat, np_action_quat_to_6d_rotation
 from src.data_processing.utils import resize, resize_crop
 import xml.etree.ElementTree as ET
+
+
+# ---------------------------------------------------------------------------
+# Dataset correction constants for Robust Re-arrangement dataset
+# ---------------------------------------------------------------------------
+
+# The RR dataset was recorded with ROBOT_HEIGHT=0 (robot base at Z=0.415),
+# while juicer uses ROBOT_HEIGHT=0.015 (base at Z=0.430).  robot_state[:,2]
+# and action/pos[:,2] store absolute EE Z as (hand_z - base_z), so RR values
+# are RR_Z_OFFSET metres too high relative to juicer's convention.
+RR_Z_OFFSET = 0.015
+
+# Per-step rotation clip magnitude (radians) applied when reconstructing
+# action/delta rotation from consecutive robot_state frames.  Matches
+# juicer's process_pickles clip_axis_rotation default.
+RR_ROT_CLIP = 0.35
 
 
 # ---------------------------------------------------------------------------
@@ -511,6 +527,68 @@ def process_zarr(env, input_zarr_path: Path, output_zarr_path: Path, episodes=No
     else:
         dst = zarr.open(str(output_zarr_path), mode="w")
         copy_zarr_skeleton(src, dst)
+
+        # Z-offset fix: robot_state[:,2] and action/pos[:,2] are absolute EE Z
+        # expressed as (hand_z - base_z).  RR values are RR_Z_OFFSET too high.
+        # action/delta[:,2] is a relative delta and is unaffected.
+        rs = dst["robot_state"][:]
+        rs[:, 2] -= RR_Z_OFFSET
+        dst["robot_state"][:] = rs
+
+        ap = dst["action/pos"][:]
+        ap[:, 2] -= RR_Z_OFFSET
+        dst["action/pos"][:] = ap
+
+        # UNTESTED
+        # Rotation-delta fix: the RR process_pickles.py has a bug in
+        # clip_quat_xyzw_magnitude where np.linalg.norm is applied to the entire
+        # (T, 3) rotvec array instead of per-row, collapsing all rotation deltas
+        # to ~0.65°/step.  Reconstruct correct per-step deltas from consecutive
+        # robot_state frames and clip per-step to RR_ROT_CLIP.
+        # action/pos[3:9] is also rebuilt since it was derived from the buggy delta.
+        episode_ends_src = src["episode_ends"][:]
+        episode_starts_src = np.concatenate([[0], episode_ends_src[:-1]])
+
+        rs_all = dst["robot_state"][:]  # already Z-corrected above
+        ad_all = dst["action/delta"][:]
+        apos_all = dst["action/pos"][:]
+
+        for ep_s, ep_e in zip(episode_starts_src, episode_ends_src):
+            rs_q = np_rot_6d_to_isaac_quat(rs_all[ep_s:ep_e, 3:9])  # (T, 4) xyzw
+
+            # For each frame t the rotation target is the state at t+1.
+            # Reuse the last frame for the final step (zero delta).
+            target_q = np.concatenate([rs_q[1:], rs_q[-1:]], axis=0)
+
+            cur_r = R.from_quat(rs_q)
+            tgt_r = R.from_quat(target_q)
+            delta_rv = (cur_r.inv() * tgt_r).as_rotvec()  # (T, 3) — body/local frame, matches juicer
+
+            # Per-step clip to RR_ROT_CLIP radians
+            mags = np.linalg.norm(delta_rv, axis=1, keepdims=True)
+            scale = np.where(mags > RR_ROT_CLIP, RR_ROT_CLIP / np.maximum(mags, 1e-8), 1.0)
+            delta_rv_clipped = delta_rv * scale
+            delta_q_clipped = R.from_rotvec(delta_rv_clipped).as_quat()  # (T, 4) xyzw
+
+            # Repack into 10D: [pos(3), rot6d(6), gripper(1)]
+            T_ep = ep_e - ep_s
+            buf = np.zeros((T_ep, 8), dtype=np.float32)
+            buf[:, :3] = ad_all[ep_s:ep_e, :3]  # delta pos (unchanged)
+            buf[:, 3:7] = delta_q_clipped
+            buf[:, 7] = ad_all[ep_s:ep_e, 9]  # gripper (unchanged)
+            ad_all[ep_s:ep_e] = np_action_quat_to_6d_rotation(buf)
+
+            # Rebuild action/pos[3:9]
+            new_target_q = (R.from_rotvec(delta_rv_clipped) * cur_r).as_quat()
+            buf[:, 3:7] = new_target_q
+            buf[:, :3] = apos_all[ep_s:ep_e, :3]
+            buf[:, 7] = apos_all[ep_s:ep_e, 9]
+            apos_all[ep_s:ep_e] = np_action_quat_to_6d_rotation(buf)
+
+        dst["action/delta"][:] = ad_all
+        dst["action/pos"][:] = apos_all
+        print("  [rot-fix] Reconstructed rotation deltas from consecutive robot_state frames.")
+
         chunk_t = min(256, T)
         dst_img1 = dst.zeros("color_image1", shape=(T, H, W, C), chunks=(chunk_t, H, W, C), dtype=np.uint8)
         dst_img2 = dst.zeros("color_image2", shape=(T, H, W, C), chunks=(chunk_t, H, W, C), dtype=np.uint8)

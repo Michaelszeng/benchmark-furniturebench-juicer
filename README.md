@@ -28,27 +28,6 @@ Convert `.pkl.xz` to `.zarr`:
 python src/data_processing/process_pickles.py -f "FURNITURE" -s "scripted" -e "sim"
 ```
 
-#### Robust Re-arrangement Data
-
-Download Robust Re-arrangement Data:
-```bash
-# One-time:
-pip install boto3
-pip install gymnasium
-python scripts/download_robust_rearrangement_data.py --task one_leg
-python scripts/download_robust_rearrangement_data.py --task lamp
-python scripts/download_robust_rearrangement_data.py --task round_table
-```
-
-Post-process the dataset with April Tags visualized (since all data used by this repo has April Tags):
-```bash
-python scripts/process_robust_rearrangement_data.py \
-        --input-dir dataset/processed/diffik/sim/one_leg/teleop/low/success.zarr \
-        --output-dir dataset/processed/diffik/sim/one_leg/teleop/low/success_processed.zarr \
-        --furniture "FURNITURE" \
-        --randomness low
-```
-
 #### Convert to Training Format
 
 Convert `zarr` to diffusion policy format (`<source_zarr_name>_translated/zarr`):
@@ -116,6 +95,33 @@ conda activate py38
 3. Ensure you follow the **Evaluating a diffusion_policy Checkpoint** instructions above as well.
 
 
+
+
+
+#### Robust Re-arrangement Data
+
+IMPORTANT: DO NOT USE ROBUST-REARRANGEMENT DATA. See: https://github.com/ankile/robust-rearrangement/issues/42
+
+~~NOTE: Robust Re-arrangement uses a different parts-poses format that isn't currently trainslated; so it is not safe to train state-based policies using the combined Robust Re-arrangement + imitation-juicer data.~~
+
+~~Download Robust Re-arrangement Data:~~
+```bash
+# One-time:
+pip install boto3
+pip install gymnasium
+python scripts/download_robust_rearrangement_data.py --task one_leg
+python scripts/download_robust_rearrangement_data.py --task lamp
+python scripts/download_robust_rearrangement_data.py --task round_table
+```
+
+~~Post-process the dataset with April Tags visualized (since all data used by this repo has April Tags):~~
+```bash
+python scripts/process_robust_rearrangement_data.py \
+        --input-dir dataset/processed/diffik/sim/one_leg/teleop/low/success.zarr \
+        --output-dir dataset/processed/diffik/sim/one_leg/teleop/low/success_processed.zarr \
+        --furniture "FURNITURE" \
+        --randomness low
+```
 
 
 

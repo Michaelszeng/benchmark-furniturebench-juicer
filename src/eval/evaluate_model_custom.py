@@ -339,7 +339,7 @@ if __name__ == "__main__":
             record_video=record_this_round,
             n_action_steps=n_action_steps,
         )
-        wall_time = time.time() - t_start
+        rollout_time = time.time() - t_start
 
         # Stop saving trial records once we reach n_rollouts (so we have exactly n_rollouts records)
         for env_idx in range(args.n_envs):
@@ -368,8 +368,9 @@ if __name__ == "__main__":
 
         rate = n_success / n_total
         video_tag = "video=on" if record_this_round else "video=off"
+        total_time = time.time() - t_start
         print(
-            f"Round {i + 1}/{n_rounds} [{video_tag}, {wall_time:.1f}s]: result={round_result['result']}  running {n_success}/{n_total} ({rate:.1%})"
+            f"Round {i + 1}/{n_rounds} [{video_tag}]: rollout time={rollout_time:.1f}s, total time={total_time:.1f}s, result={round_result['result']}  running {n_success}/{n_total} ({rate:.1%})"
         )
 
     csv_file.close()

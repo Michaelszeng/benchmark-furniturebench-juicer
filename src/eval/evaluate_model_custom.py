@@ -184,7 +184,7 @@ def run_rollout(
         if len(action_queue) == 0:
             obs_dict = build_obs_dict(obs_deque, device)
             result = policy.predict_action(obs_dict, use_DDIM=True)
-            actions = result["action"]
+            actions = result["action_pred"]
             n_steps = n_action_steps if n_action_steps is not None else actions.shape[1]
             for t in range(n_steps):
                 action_queue.append(actions[:, t, :])
@@ -368,7 +368,9 @@ if __name__ == "__main__":
 
         rate = n_success / n_total
         video_tag = "video=on" if record_this_round else "video=off"
-        print(f"Round {i + 1}/{n_rounds} [{video_tag}, {wall_time:.1f}s]: result={round_result['result']}  running {n_success}/{n_total} ({rate:.1%})")
+        print(
+            f"Round {i + 1}/{n_rounds} [{video_tag}, {wall_time:.1f}s]: result={round_result['result']}  running {n_success}/{n_total} ({rate:.1%})"
+        )
 
     csv_file.close()
 
@@ -400,6 +402,7 @@ if __name__ == "__main__":
     # Flush stdout/stderr first so buffered print output isn't lost (os._exit
     # skips Python's normal atexit/buffer-flush sequence).
     import sys
+
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)

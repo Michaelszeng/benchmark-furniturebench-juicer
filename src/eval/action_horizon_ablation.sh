@@ -4,16 +4,17 @@
 # Results are written to: outputs/<DATE>/<TIME>/T_a_<x>/<checkpoint_stem>/
 #
 # Example usage (single checkpoint):
-#   ./src/eval/action_horizon_ablation.sh /home/michzeng/diffusion-policy/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints/epoch=095-val_loss=0.0659-val_ddim_mse=0.015579.ckpt one_leg 64
+#   ./src/eval/action_horizon_ablation.sh /home/michzeng/diffusion-policy/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints/epoch=095-val_loss=0.0659-val_ddim_mse=0.015579.ckpt one_leg 64 0 500
 #
 # Example usage (directory of checkpoints):
-#   ./src/eval/action_horizon_ablation.sh /home/michzeng/diffusion-policy/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints/ one_leg 64
+#   ./src/eval/action_horizon_ablation.sh /home/michzeng/diffusion-policy/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints/ one_leg 64 0 500
 set -euo pipefail
 
-CHECKPOINT_PATH="${1:?Usage: $0 <checkpoint_or_dir> [furniture] [n_envs]}"
+CHECKPOINT_PATH="${1:?Usage: $0 <checkpoint_or_dir> [furniture] [n_envs] [n_video_trials] [n_rollouts]}"
 FURNITURE="${2:-one_leg}"
 N_ENVS="${3:-1}"
-N_ROLLOUTS=500
+N_VIDEO_TRIALS="${4:-0}"
+N_ROLLOUTS="${5:-500}"
 
 # Collect checkpoints: single file or all .ckpt files in a directory.
 if [[ -f "${CHECKPOINT_PATH}" ]]; then
@@ -46,13 +47,14 @@ for CHECKPOINT in "${CHECKPOINTS[@]}"; do
         echo "=========================================="
         echo "Action horizon: ${N_ACTION_STEPS}  ->  ${OUT_DIR}"
         echo "=========================================="
-        conda run -n imitation-juicer python src/eval/evaluate_model_custom.py \
+        python src/eval/evaluate_model_custom.py \
             --checkpoint "${CHECKPOINT}" \
             --furniture "${FURNITURE}" \
             --n-rollouts "${N_ROLLOUTS}" \
             --n-envs "${N_ENVS}" \
             --n-action-steps "${N_ACTION_STEPS}" \
+            --n-video-trials "${N_VIDEO_TRIALS}" \
             --output-dir "${OUT_DIR}" \
-            --headless
+            --headless || { echo "ERROR: evaluate_model_custom.py failed (exit $?) for action_horizon=${N_ACTION_STEPS}, checkpoint=${CKPT_STEM}" >&2; continue; }
     done
 done

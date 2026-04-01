@@ -66,7 +66,7 @@ def build_obs_dict(obs_deque: collections.deque, device: torch.device) -> dict:
     return {"obs": obs_stacked}
 
 
-def load_policy(checkpoint_path: str, device: torch.device, normalizer_override: str = None):
+def load_policy(checkpoint_path: str, device: torch.device):
     """Load a diffusion_policy workspace + policy from a .ckpt file.
 
     Also loads (or generates) the paired normalizer.pt that lives next to the
@@ -91,13 +91,9 @@ def load_policy(checkpoint_path: str, device: torch.device, normalizer_override:
     if "state_dicts" in payload:
         for sd_key, sd in payload["state_dicts"].items():
             if any(k.startswith("module.") for k in sd):
-                sd = {
-                    (k[len("module."):] if k.startswith("module.") else k): v
-                    for k, v in sd.items()
-                }
+                sd = {(k[len("module.") :] if k.startswith("module.") else k): v for k, v in sd.items()}
             payload["state_dicts"][sd_key] = {
-                k: v for k, v in sd.items()
-                if not any(k.startswith(pfx) for pfx in _INFERENCE_ONLY_DROP_PREFIXES)
+                k: v for k, v in sd.items() if not any(k.startswith(pfx) for pfx in _INFERENCE_ONLY_DROP_PREFIXES)
             }
     # END TEMPORARY FIX
 
@@ -112,10 +108,7 @@ def load_policy(checkpoint_path: str, device: torch.device, normalizer_override:
     # --- normalizer ---
     ckpt_path = Path(checkpoint_path)
     normalizer_path = ckpt_path.parent.parent / "normalizer.pt"
-    if normalizer_override is not None:
-        print(f"Loading normalizer from {normalizer_override}")
-        normalizer = torch.load(normalizer_override)
-    elif normalizer_path.exists():
+    if normalizer_path.exists():
         print(f"Loading normalizer from {normalizer_path}")
         normalizer = torch.load(normalizer_path)
     else:
@@ -259,7 +252,6 @@ if __name__ == "__main__":
     parser.add_argument("--n-rollouts", type=int, default=10)
     parser.add_argument("--n-envs", type=int, default=1)
     parser.add_argument("--randomness", type=str, default="low")
-    parser.add_argument("--normalizer", type=str, default=None, help="Path to normalizer.pt (overrides auto-discovery)")
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--headless", action="store_true", default=False)
     parser.add_argument("--no-headless", dest="headless", action="store_false")
@@ -285,7 +277,7 @@ if __name__ == "__main__":
     device = torch.device(args.device)
 
     print(f"Loading policy from {args.checkpoint}")
-    policy, cfg = load_policy(args.checkpoint, device, normalizer_override=args.normalizer)
+    policy, cfg = load_policy(args.checkpoint, device)
     n_obs_steps: int = int(cfg.n_obs_steps)
     n_action_steps: int = args.n_action_steps  # None means use the value from the checkpoint config
     print(

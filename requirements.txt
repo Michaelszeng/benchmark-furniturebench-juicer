@@ -1,5 +1,6 @@
 accelerate==0.26.1
 absl-py==2.1.0
+accelerate==0.13.2
 antlr4-python3-runtime==4.9.3
 appdirs==1.4.4
 asciitree==0.3.3

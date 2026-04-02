@@ -1,5 +1,8 @@
 import argparse
+import multiprocessing
 import os
+
+multiprocessing.set_start_method("spawn", force=True)
 
 if "DATA_DIR_RAW" not in os.environ:
     os.environ["DATA_DIR_RAW"] = "dataset"

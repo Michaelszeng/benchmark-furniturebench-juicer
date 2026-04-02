@@ -136,11 +136,17 @@ class DataCollector:
         while num_saved() < self.num_demos:
             # Get an action.
             if self.scripted:
-                action, skill_complete = self.env.get_assembly_action()
+                noisy_action, clean_action, skill_complete = self.env.get_assembly_action()
                 pos_bounds_m = 0.02 if self.env.ctrl_mode == "diffik" else 0.025
                 ori_bounds_deg = 15 if self.env.ctrl_mode == "diffik" else 20
                 action = scale_scripted_action(
-                    action.detach().cpu().clone(),
+                    noisy_action.detach().cpu().clone(),
+                    pos_bounds_m=pos_bounds_m,
+                    ori_bounds_deg=ori_bounds_deg,
+                    device=self.env.device,
+                )
+                record_action = scale_scripted_action(
+                    clean_action.detach().cpu().clone(),
                     pos_bounds_m=pos_bounds_m,
                     ori_bounds_deg=ori_bounds_deg,
                     device=self.env.device,
@@ -148,6 +154,7 @@ class DataCollector:
                 collect_enum = CollectEnum.DONE_FALSE
             else:
                 action, collect_enum = self.device_interface.get_action()
+                record_action = action
                 skill_complete = int(collect_enum == CollectEnum.SKILL)
                 if skill_complete == 1:
                     self.skill_set.append(skill_complete)
@@ -263,11 +270,11 @@ class DataCollector:
                 self.obs.append(ob)
 
                 if self.is_sim:
-                    if isinstance(action, torch.Tensor):
-                        action = action.squeeze().cpu().numpy()
+                    if isinstance(record_action, torch.Tensor):
+                        record_action = record_action.squeeze().cpu().numpy()
                     else:
-                        action = action.squeeze()
-                self.acts.append(action)
+                        record_action = record_action.squeeze()
+                self.acts.append(record_action)
                 self.rews.append(rew)
                 self.skills.append(skill_complete)
             obs = next_obs

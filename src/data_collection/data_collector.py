@@ -16,7 +16,7 @@ from furniture_bench.sim_config import sim_config
 from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
 
 from src.data_processing.utils import resize, resize_crop
-from src.visualization.render_mp4 import pickle_data
+from src.visualization.render_mp4 import create_mp4, data_to_video, pickle_data
 
 
 class DataCollector:
@@ -48,6 +48,8 @@ class DataCollector:
         ctrl_mode: str = "osc",
         compress_pickles: bool = False,
         verbose: bool = False,
+        non_markovian: bool = False,
+        record_video: bool = False,
     ):
         """
         Args:
@@ -118,6 +120,8 @@ class DataCollector:
         self.resize_sim_img = resize_sim_img
         self.compress_pickles = compress_pickles
         self.verbose = verbose
+        self.non_markovian = non_markovian
+        self.record_video = record_video
 
         self._reset_collector_buffer()
 
@@ -136,11 +140,17 @@ class DataCollector:
         while num_saved() < self.num_demos:
             # Get an action.
             if self.scripted:
-                action, skill_complete = self.env.get_assembly_action()
+                noisy_action, clean_action, skill_complete = self.env.get_assembly_action()
                 pos_bounds_m = 0.02 if self.env.ctrl_mode == "diffik" else 0.025
                 ori_bounds_deg = 15 if self.env.ctrl_mode == "diffik" else 20
                 action = scale_scripted_action(
-                    action.detach().cpu().clone(),
+                    noisy_action.detach().cpu().clone(),
+                    pos_bounds_m=pos_bounds_m,
+                    ori_bounds_deg=ori_bounds_deg,
+                    device=self.env.device,
+                )
+                record_action = scale_scripted_action(
+                    clean_action.detach().cpu().clone(),
                     pos_bounds_m=pos_bounds_m,
                     ori_bounds_deg=ori_bounds_deg,
                     device=self.env.device,
@@ -148,6 +158,7 @@ class DataCollector:
                 collect_enum = CollectEnum.DONE_FALSE
             else:
                 action, collect_enum = self.device_interface.get_action()
+                record_action = action
                 skill_complete = int(collect_enum == CollectEnum.SKILL)
                 if skill_complete == 1:
                     self.skill_set.append(skill_complete)
@@ -263,11 +274,11 @@ class DataCollector:
                 self.obs.append(ob)
 
                 if self.is_sim:
-                    if isinstance(action, torch.Tensor):
-                        action = action.squeeze().cpu().numpy()
+                    if isinstance(record_action, torch.Tensor):
+                        record_action = record_action.squeeze().cpu().numpy()
                     else:
-                        action = action.squeeze()
-                self.acts.append(action)
+                        record_action = record_action.squeeze()
+                self.acts.append(record_action)
                 self.rews.append(rew)
                 self.skills.append(skill_complete)
             obs = next_obs
@@ -284,9 +295,18 @@ class DataCollector:
         print(f"Saved {self.traj_counter} trajectories in this run.")
         return self.reset()
 
+    def _configure_episode(self):
+        """Propagate per-episode non-Markovian config to part FSMs."""
+        if not self.non_markovian:
+            return
+        for part in self.env.furnitures[0].parts:
+            if hasattr(part, "apply_non_markovian_config"):
+                part.apply_non_markovian_config()
+
     def reset(self):
         obs = self.env.reset()
         self._reset_collector_buffer()
+        self._configure_episode()
 
         print("Start collecting the data!")
         if not self.scripted:
@@ -340,6 +360,11 @@ class DataCollector:
         pickle_data(data, path)
 
         print(f"Data saved at {path}")
+
+        if self.record_video:
+            frames = data_to_video(data)
+            video_path = path.with_suffix("").with_suffix(".mp4")
+            create_mp4(frames, video_path)
 
     def __del__(self):
         del self.env

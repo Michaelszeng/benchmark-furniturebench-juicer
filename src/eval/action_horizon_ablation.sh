@@ -49,7 +49,7 @@ for CHECKPOINT in "${CHECKPOINTS[@]}"; do
         echo "=========================================="
         echo "Action horizon: ${N_ACTION_STEPS}  ->  ${OUT_DIR}"
         echo "=========================================="
-        python src/eval/evaluate_model_custom.py \
+        if ! python src/eval/evaluate_model_custom.py \
             --checkpoint "${CHECKPOINT}" \
             --furniture "${FURNITURE}" \
             --n-rollouts "${N_ROLLOUTS}" \
@@ -57,6 +57,9 @@ for CHECKPOINT in "${CHECKPOINTS[@]}"; do
             --n-action-steps "${N_ACTION_STEPS}" \
             --n-video-trials "${N_VIDEO_TRIALS}" \
             --output-dir "${OUT_DIR}" \
-            --headless || { echo "ERROR: evaluate_model_custom.py failed (exit $?) for action_horizon=${N_ACTION_STEPS}, checkpoint=${CKPT_STEM}" >&2; continue; }
+            --headless; then
+            echo "ERROR: evaluate_model_custom.py failed for action_horizon=${N_ACTION_STEPS}, checkpoint=${CKPT_STEM}" >&2
+            continue
+        fi
     done
 done

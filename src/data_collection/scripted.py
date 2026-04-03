@@ -18,6 +18,8 @@ if __name__ == "__main__":
     parser.add_argument("--furniture", "-f", type=str, required=True)
     parser.add_argument("--save-failure", action="store_true")
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--non-markovian", action="store_true", help="Activate non-Markovian expert policy")
+    parser.add_argument("--record-video", action="store_true", help="Save an MP4 video alongside each trajectory pickle")
 
     args = parser.parse_args()
 
@@ -54,6 +56,8 @@ if __name__ == "__main__":
         graphics_device_id=args.gpu_id,
         ctrl_mode="osc",
         compress_pickles=True,
+        non_markovian=args.non_markovian,
+        record_video=args.record_video,
     )
 
     collector.collect()

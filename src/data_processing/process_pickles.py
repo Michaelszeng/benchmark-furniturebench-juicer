@@ -56,38 +56,37 @@ from src.data_processing.utils import clip_axis_rotation
 from src.visualization.render_mp4 import unpickle_data
 
 
-# === Modified Function to Initialize Zarr Store with Full Dimensions ===
-def initialize_zarr_store(out_path, full_data_shapes, chunksize=32):
+# === Modified Function to Initialize Zarr Store with Empty Dimensions ===
+def initialize_zarr_store_empty(out_path, data_shapes_and_dtypes, chunksize=32):
     """
-    Initialize the Zarr store with full dimensions for each dataset.
+    Initialize the Zarr store with empty dimensions for each dataset.
     """
     z = zarr.open(str(out_path), mode="w")
     z.attrs["time_created"] = datetime.now().astimezone().isoformat()
 
     # Define the compressor
-    # compressor = Blosc(cname="zstd", clevel=9, shuffle=Blosc.BITSHUFFLE)
     compressor = Blosc(cname="lz4", clevel=5)
 
-    # Initialize datasets with full shapes
-    for name, shape, dtype in full_data_shapes:
+    # Initialize datasets with empty first dimension
+    for name, shape, dtype in data_shapes_and_dtypes:
         if "color_image" in name:  # Apply compression to image data
             z.create_dataset(
                 name,
-                shape=shape,
+                shape=(0,) + shape,
                 dtype=dtype,
-                chunks=(chunksize,) + shape[1:],
+                chunks=(chunksize,) + shape,
                 compressor=compressor,
             )
         elif dtype == object:
             z.create_dataset(
                 name,
-                shape=shape,
+                shape=(0,),
                 dtype=dtype,
                 chunks=(chunksize,),
                 object_codec=JSON(),
             )
         else:
-            z.create_dataset(name, shape=shape, dtype=dtype, chunks=(chunksize,) + shape[1:])
+            z.create_dataset(name, shape=(0,) + shape, dtype=dtype, chunks=(chunksize,) + shape)
 
     return z
 
@@ -194,96 +193,64 @@ def process_pickle_file(
     return processed_data
 
 
-def parallel_process_pickle_files(
+def _append_episode_to_zarr(z, data, current_episode_end):
+    """Append a single episode's processed data to an open Zarr store."""
+    for key in [
+        "robot_state",
+        "color_image1",
+        "color_image2",
+        "action/delta",
+        "action/pos",
+        "reward",
+        "skill",
+        "parts_poses",
+        "augment_states",
+    ]:
+        z[key].append(data[key])
+
+    new_episode_end = current_episode_end + data["episode_length"]
+    z["episode_ends"].append(np.array([new_episode_end], dtype=np.uint32))
+
+    for key in ["furniture", "pickle_file"]:
+        z[key].append(np.array([data[key]], dtype=object))
+    for key in ["success", "failure_idx", "critical_state_id"]:
+        z[key].append(np.array([data[key]]))
+
+    return new_episode_end
+
+
+def stream_process_and_write_to_zarr(
     pickle_paths,
+    z,
     noop_threshold,
     num_threads,
     calculate_pos_action_from_delta=False,
+    initial_episode_end=0,
 ):
     """
-    Process all pickle files in parallel and aggregate results.
-    """
-    # Initialize empty data structures to hold aggregated data
-    aggregated_data = {
-        "robot_state": [],
-        "color_image1": [],
-        "color_image2": [],
-        "action/delta": [],
-        "action/pos": [],
-        "reward": [],
-        "skill": [],
-        "augment_states": [],
-        "parts_poses": [],
-        "episode_ends": [],
-        "furniture": [],
-        "success": [],
-        "failure_idx": [],  # This will be -1 if no failure
-        "critical_state_id": [],  # This will be -1 if not augmentation trajectory or no label
-        "pickle_file": [],
-    }
+    Process pickle files and write each episode to Zarr immediately to avoid OOM.
 
-    # Process files in parallel
+    Tasks are submitted in batches of num_threads. Each batch is fully written and freed
+    before the next batch is submitted, bounding peak memory to num_threads episodes.
+    """
+    current_episode_end = initial_episode_end
+
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = [
-            executor.submit(
-                process_pickle_file,
-                path,
-                noop_threshold,
-                calculate_pos_action_from_delta,
-            )
-            for path in pickle_paths
-        ]
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing files"):
-            data = future.result()
-            # Aggregate data from each file
-            for key in data:
-                if key == "episode_length":
-                    # Calculate and append to episode_ends
-                    last_end = aggregated_data["episode_ends"][-1] if len(aggregated_data["episode_ends"]) > 0 else 0
-                    aggregated_data["episode_ends"].append(last_end + data[key])
-                else:
-                    aggregated_data[key].append(data[key])
-
-    # Convert lists to numpy arrays for numerical data
-    for key in tqdm(
-        [
-            "robot_state",
-            "color_image1",
-            "color_image2",
-            "action/delta",
-            "action/pos",
-            "reward",
-            "skill",
-            "parts_poses",
-            "augment_states",
-        ],
-        desc="Converting lists to numpy arrays",
-    ):
-        aggregated_data[key] = np.concatenate(aggregated_data[key])
-
-    return aggregated_data
-
-
-def write_to_zarr_store(z, key, value):
-    """
-    Function to write data to a Zarr store.
-    """
-    z[key][:] = value
-
-
-def parallel_write_to_zarr(z, aggregated_data, num_threads):
-    """
-    Write aggregated data to the Zarr store in parallel.
-    """
-    with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = []
-        for key, value in aggregated_data.items():
-            # Schedule the writing of each dataset
-            futures.append(executor.submit(write_to_zarr_store, z, key, value))
-
-        # Wait for all futures to complete and track progress
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Writing to Zarr store"):
-            future.result()
+        for batch_start in tqdm(
+            range(0, len(pickle_paths), num_threads), desc="Processing and writing files"
+        ):
+            batch_paths = pickle_paths[batch_start : batch_start + num_threads]
+            futures = [
+                executor.submit(
+                    process_pickle_file, path, noop_threshold, calculate_pos_action_from_delta
+                )
+                for path in batch_paths
+            ]
+            for future in futures:
+                data = future.result()
+                current_episode_end = _append_episode_to_zarr(z, data, current_episode_end)
+                del data
+            del futures
 
 
 # === Entry Point of the Script ===
@@ -364,46 +331,45 @@ if __name__ == "__main__":
 
     print(f"Processing pickle files with {n_cpus} CPUs, chunksize={chunksize}, noop_threshold={noop_threshold}")
 
-    all_data = parallel_process_pickle_files(
-        pickle_paths,
+    # Process the first file to learn per-timestep shapes, then initialize the Zarr store.
+    print("Reading first pickle file to determine data shapes...")
+    first_data = process_pickle_file(pickle_paths[0], noop_threshold, args.calculate_pos_action_from_delta)
+
+    data_shapes_and_dtypes = [
+        # Per-timestep arrays — pass trailing shape only (first dim is variable length)
+        ("robot_state", first_data["robot_state"].shape[1:], np.float32),
+        ("color_image1", first_data["color_image1"].shape[1:], np.uint8),
+        ("color_image2", first_data["color_image2"].shape[1:], np.uint8),
+        ("action/delta", first_data["action/delta"].shape[1:], np.float32),
+        ("action/pos", first_data["action/pos"].shape[1:], np.float32),
+        ("parts_poses", first_data["parts_poses"].shape[1:], np.float32),
+        ("reward", first_data["reward"].shape[1:], np.float32),
+        ("skill", first_data["skill"].shape[1:], np.float32),
+        ("augment_states", first_data["augment_states"].shape[1:], np.float32),
+        # Per-episode scalars/strings
+        ("episode_ends", (), np.uint32),
+        ("furniture", (), object),
+        ("success", (), np.uint8),
+        ("failure_idx", (), np.int32),
+        ("critical_state_id", (), np.int32),
+        ("pickle_file", (), object),
+    ]
+
+    # Initialize Zarr store with empty dimensions
+    z = initialize_zarr_store_empty(output_path, data_shapes_and_dtypes, chunksize=chunksize)
+
+    # Write the first episode (already processed above), then stream the rest
+    current_episode_end = _append_episode_to_zarr(z, first_data, 0)
+    del first_data
+
+    stream_process_and_write_to_zarr(
+        pickle_paths[1:],
+        z,
         noop_threshold,
         n_cpus,
         calculate_pos_action_from_delta=args.calculate_pos_action_from_delta,
+        initial_episode_end=current_episode_end,
     )
-
-    # Define the full shapes for each dataset
-    full_data_shapes = [
-        # These are of length: number of timesteps
-        ("robot_state", all_data["robot_state"].shape, np.float32),
-        ("color_image1", all_data["color_image1"].shape, np.uint8),
-        ("color_image2", all_data["color_image2"].shape, np.uint8),
-        ("action/delta", all_data["action/delta"].shape, np.float32),
-        ("action/pos", all_data["action/pos"].shape, np.float32),
-        ("parts_poses", all_data["parts_poses"].shape, np.float32),
-        ("reward", all_data["reward"].shape, np.float32),
-        ("skill", all_data["skill"].shape, np.float32),
-        ("augment_states", all_data["augment_states"].shape, np.float32),
-        # These are of length: number of episodes
-        ("episode_ends", (len(all_data["episode_ends"]),), np.uint32),
-        ("furniture", (len(all_data["furniture"]),), str),
-        ("success", (len(all_data["success"]),), np.uint8),
-        ("failure_idx", (len(all_data["failure_idx"]),), np.int32),
-        ("critical_state_id", (len(all_data["critical_state_id"]),), np.int32),
-        ("pickle_file", (len(all_data["pickle_file"]),), str),
-    ]
-
-    # Initialize Zarr store with full dimensions
-    z = initialize_zarr_store(output_path, full_data_shapes, chunksize=chunksize)
-
-    # Write the data to the Zarr store
-    it = tqdm(all_data)
-    for name in it:
-        it.set_description(f"Writing data to zarr: {name}")
-        dataset = z[name]
-        data = all_data[name]
-
-        for i in trange(0, len(data), chunksize, desc="Writing chunks", leave=False):
-            dataset[i : i + chunksize] = data[i : i + chunksize]
 
     # Update final metadata
     z.attrs["time_finished"] = datetime.now().astimezone().isoformat()

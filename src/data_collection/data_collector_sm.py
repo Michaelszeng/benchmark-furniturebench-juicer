@@ -12,21 +12,28 @@ import numpy as np
 import scipy.spatial.transform as st
 import torch
 from furniture_bench.device.device_interface import DeviceInterface
+
 try:
     from furniture_bench.device.spacemouse.spacemouse_shared_memory import Spacemouse
 except (ImportError, AttributeError):
     print("Could not import Spacemouse, using dummy. This is expected if you are not using a SpaceMouse.")
+
     class Spacemouse:
         def __init__(self, shm_manager=None, deadzone=None):
             pass
+
         def __enter__(self):
             return self
+
         def __exit__(self, exc_type, exc_val, exc_tb):
             pass
+
         def get_motion_state_transformed(self):
             return np.zeros(6)
+
         def is_button_pressed(self, button_id):
             return False
+
 
 from furniture_bench.envs.initialization_mode import Randomness
 from furniture_bench.sim_config import sim_config
@@ -287,6 +294,7 @@ class DataCollectorSpaceMouse:
 
                     # get teleop command
                     sm_state = sm.get_motion_state_transformed()
+                    print("sm_state", sm_state)
                     dpos = sm_state[:3] * (args.max_pos_speed / frequency)
                     drot_xyz = sm_state[3:] * (args.max_rot_speed / frequency)
                     drot = st.Rotation.from_euler("xyz", drot_xyz)

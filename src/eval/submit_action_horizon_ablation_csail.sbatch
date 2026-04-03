@@ -51,6 +51,7 @@ mkdir -p logs
 
 
 export PYTHONPATH=$PWD:$PYTHONPATH
+export PHYSX_MAX_GPU_CONTACT_PAIRS=$((1024 * 1024 * 32))
 
 export HOME=/data/locomotion/michzeng
 

@@ -16,7 +16,7 @@ from furniture_bench.sim_config import sim_config
 from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
 
 from src.data_processing.utils import resize, resize_crop
-from src.visualization.render_mp4 import pickle_data
+from src.visualization.render_mp4 import create_mp4, data_to_video, pickle_data
 
 
 class DataCollector:
@@ -48,6 +48,8 @@ class DataCollector:
         ctrl_mode: str = "osc",
         compress_pickles: bool = False,
         verbose: bool = False,
+        non_markovian: bool = False,
+        record_video: bool = False,
     ):
         """
         Args:
@@ -118,6 +120,8 @@ class DataCollector:
         self.resize_sim_img = resize_sim_img
         self.compress_pickles = compress_pickles
         self.verbose = verbose
+        self.non_markovian = non_markovian
+        self.record_video = record_video
 
         self._reset_collector_buffer()
 
@@ -291,9 +295,18 @@ class DataCollector:
         print(f"Saved {self.traj_counter} trajectories in this run.")
         return self.reset()
 
+    def _configure_episode(self):
+        """Propagate per-episode non-Markovian config to part FSMs."""
+        if not self.non_markovian:
+            return
+        for part in self.env.furnitures[0].parts:
+            if hasattr(part, "apply_non_markovian_config"):
+                part.apply_non_markovian_config()
+
     def reset(self):
         obs = self.env.reset()
         self._reset_collector_buffer()
+        self._configure_episode()
 
         print("Start collecting the data!")
         if not self.scripted:
@@ -347,6 +360,11 @@ class DataCollector:
         pickle_data(data, path)
 
         print(f"Data saved at {path}")
+
+        if self.record_video:
+            frames = data_to_video(data)
+            video_path = path.with_suffix("").with_suffix(".mp4")
+            create_mp4(frames, video_path)
 
     def __del__(self):
         del self.env

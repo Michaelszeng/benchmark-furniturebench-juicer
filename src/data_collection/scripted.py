@@ -19,7 +19,13 @@ if __name__ == "__main__":
     parser.add_argument("--save-failure", action="store_true")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--non-markovian", action="store_true", help="Activate non-Markovian expert policy")
-    parser.add_argument("--record-video", action="store_true", help="Save an MP4 video alongside each trajectory pickle")
+    parser.add_argument(
+        "--record-video",
+        type=str,
+        default=None,
+        choices=["all", "success", "failure"],
+        help="Save MP4 videos for the specified episode outcomes (all / success / failure). Omit to disable.",
+    )
 
     args = parser.parse_args()
 

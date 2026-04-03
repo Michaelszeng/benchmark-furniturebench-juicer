@@ -49,7 +49,7 @@ class DataCollector:
         compress_pickles: bool = False,
         verbose: bool = False,
         non_markovian: bool = False,
-        record_video: bool = False,
+        record_video: str = None,
     ):
         """
         Args:
@@ -64,12 +64,12 @@ class DataCollector:
             randomness (str): Initialization randomness level.
             compute_device_id (int): GPU device ID used for simulation.
             graphics_device_id (int): GPU device ID used for rendering.
-            pkl_only (bool): Whether to save only `pkl` files (i.e., exclude *.mp4 and *.png).
             save_failure (bool): Whether to save failure trajectories.
             num_demos (int): The maximum number of demonstrations to collect in this run. Internal loop will be terminated when this number is reached.
-            resize_sim_img (bool): Read resized image
-            ctrl_mode (str): 'osc' (joint torque, with operation space control) or 'diffik' (joint impedance, with differential inverse kinematics control)
+            resize_sim_img (bool): Read resized image.
+            ctrl_mode (str): 'osc' (joint torque, with operation space control) or 'diffik' (joint impedance, with differential inverse kinematics control).
             compress_pickles (bool): Whether to compress the pickle files with gzip.
+            record_video (str | None): Which episodes to save as MP4. One of "all", "success", "failure", or None (no video).
         """
         if is_sim:
             self.env = gym.make(
@@ -192,14 +192,15 @@ class DataCollector:
                 self.obs.append(n_ob)
 
                 if done and not self.env.furnitures[0].all_assembled():
+                    collect_enum = CollectEnum.FAIL
                     if self.save_failure:
                         print("Saving failure trajectory.")
-                        collect_enum = CollectEnum.FAIL
                         obs = self.save_and_reset(collect_enum, {})
                     else:
-                        print("Failed to assemble the furniture, reset without saving.")
+                        print("Failed to assemble the furniture — saving video only, not pickle.")
+                        self.save(collect_enum, {}, save_pickle=False)
+                        self.traj_counter += 1
                         obs = self.reset()
-                        collect_enum = CollectEnum.SUCCESS
                     self.num_fail += 1
                 else:
                     if done:
@@ -328,7 +329,7 @@ class DataCollector:
         self.last_reward_idx = -1
         self.skill_set = []
 
-    def save(self, collect_enum: CollectEnum, info):
+    def save(self, collect_enum: CollectEnum, info, save_pickle: bool = True):
         print(f"Length of trajectory: {len(self.obs)}")
 
         # Save transitions with resized images.
@@ -347,24 +348,28 @@ class DataCollector:
             data["error"] = False
             data["error_description"] = ""
 
-        # Save data.
         demo_path = self.data_path / ("success" if data["success"] else "failure")
         demo_path.mkdir(parents=True, exist_ok=True)
 
-        path = demo_path / f"{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}.pkl"
-
+        timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        pkl_path = demo_path / f"{timestamp}.pkl"
         if self.compress_pickles:
-            # Add the suffix .gz if we are compressing the pickle files
-            path = path.with_suffix(".pkl.xz")
+            pkl_path = pkl_path.with_suffix(".pkl.xz")
 
-        pickle_data(data, path)
+        if save_pickle:
+            pickle_data(data, pkl_path)
+            print(f"Data saved at {pkl_path}")
 
-        print(f"Data saved at {path}")
-
-        if self.record_video:
+        should_record = (
+            self.record_video == "all"
+            or (self.record_video == "success" and data["success"])
+            or (self.record_video == "failure" and not data["success"])
+        )
+        if should_record:
             frames = data_to_video(data)
-            video_path = path.with_suffix("").with_suffix(".mp4")
+            video_path = (demo_path / timestamp).with_suffix(".mp4")
             create_mp4(frames, video_path)
+            print(f"Video saved at {video_path}")
 
     def __del__(self):
         del self.env

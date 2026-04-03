@@ -20,6 +20,12 @@ if __name__ == "__main__":
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--non-markovian", action="store_true", help="Activate non-Markovian expert policy")
     parser.add_argument(
+        "--output-dir-suffix",
+        type=str,
+        default=None,
+        help="Suffix appended to 'scripted' in the output path (e.g. 'v2' → scripted_v2).",
+    )
+    parser.add_argument(
         "--record-video",
         type=str,
         default=None,
@@ -36,10 +42,12 @@ if __name__ == "__main__":
     #     obs_type = obs_type + "_highres"
     resize_sim_img = False
 
+    demo_source = "scripted" if not args.output_dir_suffix else f"scripted_{args.output_dir_suffix}"
+
     data_path = trajectory_save_dir(
         environment="sim",
         task=args.furniture,
-        demo_source="scripted",
+        demo_source=demo_source,
         randomness=args.randomness,
     )
 

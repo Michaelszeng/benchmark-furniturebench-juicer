@@ -20,7 +20,7 @@ python src/data_collection/puppeteer.py -f "FURNITURE"
 
 Run Scripted Policy (to generate `.pkl.xz` files) (`N` is the number of successful demos to record):
 ```bash
-python src/data_collection/scripted.py -f "FURNITURE" -n N
+python src/data_collection/scripted.py -f "FURNITURE" -n N --record-video "failure"
 ```
 
 Convert `.pkl.xz` to `.zarr`:

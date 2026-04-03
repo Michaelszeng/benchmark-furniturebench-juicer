@@ -18,7 +18,12 @@
 #
 # Runs 500 rollouts for each action horizon in [1,2,3,4,6,7,8,10,12,15],
 # for every checkpoint found under CHECKPOINT_PATH (file or directory).
-# Results are written to: outputs/<DATE>/<TIME>/T_a_<x>/<checkpoint_stem>/
+# Results are written to: outputs/<experiment_name>/T_a_<x>/<checkpoint_stem>/
+
+DATE=$(date +"%Y-%m-%d")
+TIME=$(date +"%H-%M-%S")
+echo "DATE: $DATE"
+echo "TIME: $TIME"
 
 # ============================================================================
 # Evaluation parameters
@@ -32,10 +37,9 @@ N_ROLLOUTS=500
 N_VIDEO_TRIALS=20
 # ============================================================================
 
-DATE=$(date +"%Y-%m-%d")
-TIME=$(date +"%H-%M-%S")
-echo "DATE: $DATE"
-echo "TIME: $TIME"
+# Extract the experiment name as the directory immediately before "checkpoints".
+EXPERIMENT_NAME="$(basename "$(dirname "${CHECKPOINT_PATH}")")"
+echo "EXPERIMENT_NAME: $EXPERIMENT_NAME"
 echo "SLURM Job ID: $SLURM_JOB_ID"
 echo "SLURM Node: $HOSTNAME"
 echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
@@ -67,4 +71,4 @@ echo "N_ENVS:          $N_ENVS"
 echo "N_ROLLOUTS:      $N_ROLLOUTS"
 echo "=========================================="
 
-bash src/eval/action_horizon_ablation.sh "${CHECKPOINT_PATH}" "${FURNITURE}" "${N_ENVS}" "${N_VIDEO_TRIALS}" "${N_ROLLOUTS}"
+bash src/eval/action_horizon_ablation.sh "${CHECKPOINT_PATH}" "${FURNITURE}" "${N_ENVS}" "${N_VIDEO_TRIALS}" "${N_ROLLOUTS}" "${EXPERIMENT_NAME}"

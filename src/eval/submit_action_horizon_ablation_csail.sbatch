@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=action_horizon_ablation
 #SBATCH --account=locomotion
-#SBATCH --partition=locomotion-h200
-#SBATCH --qos=locomotion-main
+#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
-#SBATCH --cpus-per-task=40
-#SBATCH --mem=128G
-#SBATCH --time=48:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=32G
+#SBATCH --time=24:00:00
 #SBATCH --output=logs/slurm-%j.out
 #SBATCH --error=logs/slurm-%j.err
 #SBATCH --requeue
@@ -29,6 +29,7 @@ CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/out
 FURNITURE="one_leg"
 N_ENVS=64
 N_ROLLOUTS=500
+N_VIDEO_TRIALS=20
 # ============================================================================
 
 DATE=$(date +"%Y-%m-%d")
@@ -65,4 +66,4 @@ echo "N_ENVS:          $N_ENVS"
 echo "N_ROLLOUTS:      $N_ROLLOUTS"
 echo "=========================================="
 
-bash src/eval/action_horizon_ablation.sh "${CHECKPOINT_PATH}" "${FURNITURE}" "${N_ENVS}" 20 "${N_ROLLOUTS}"
+bash src/eval/action_horizon_ablation.sh "${CHECKPOINT_PATH}" "${FURNITURE}" "${N_ENVS}" "${N_VIDEO_TRIALS}" "${N_ROLLOUTS}"

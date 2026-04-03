@@ -9,6 +9,8 @@
 # Example usage (directory of checkpoints):
 #   ./src/eval/action_horizon_ablation.sh /home/michzeng/diffusion-policy/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints/ one_leg 64 0 500
 set -euo pipefail
+ulimit -s unlimited
+ulimit -c unlimited
 
 CHECKPOINT_PATH="${1:?Usage: $0 <checkpoint_or_dir> [furniture] [n_envs] [n_video_trials] [n_rollouts]}"
 FURNITURE="${2:-one_leg}"

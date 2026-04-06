@@ -2,30 +2,42 @@
 # Runs 500 rollouts for each action horizon in [1,2,3,4,6,7,8,10,12,15],
 # for every checkpoint found under the given path (file or directory).
 # Results are written to: outputs/<experiment_name>/T_a_<x>/<checkpoint_stem>/
-# If <experiment_name> is omitted, it is derived from the directory before "checkpoints/".
+# The experiment name is derived from the directory before "checkpoints/".
 #
 # Example usage (single checkpoint):
 #   ./src/eval/action_horizon_ablation.sh /home/michzeng/diffusion-policy/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints/epoch=095-val_loss=0.0659-val_ddim_mse=0.015579.ckpt one_leg 64 0 500
 #
 # Example usage (directory of checkpoints):
 #   ./src/eval/action_horizon_ablation.sh /home/michzeng/diffusion-policy/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints/ one_leg 64 0 500
+#
+# Debug mode (1 rollout, 1 env, no video, not headless):
+#   ./src/eval/action_horizon_ablation.sh <checkpoint_or_dir> one_leg --debug
 set -euo pipefail
 ulimit -s unlimited
 ulimit -c unlimited
 
-CHECKPOINT_PATH="${1:?Usage: $0 <checkpoint_or_dir> [furniture] [n_envs] [n_video_trials] [n_rollouts] [experiment_name]}"
+CHECKPOINT_PATH="${1:?Usage: $0 <checkpoint_or_dir> [furniture] [n_envs] [n_video_trials] [n_rollouts] [--debug]}"
 FURNITURE="${2:-one_leg}"
 N_ENVS="${3:-1}"
 N_VIDEO_TRIALS="${4:-0}"
 N_ROLLOUTS="${5:-500}"
-# Derive experiment name from the directory before "checkpoints/" if not provided.
-if [[ -n "${6:-}" ]]; then
-    EXPERIMENT_NAME="${6}"
-elif [[ -f "${CHECKPOINT_PATH}" ]]; then
+DEBUG=false
+for arg in "$@"; do [[ "${arg}" == "--debug" ]] && DEBUG=true && break; done
+
+# Derive experiment name from the directory before "checkpoints/".
+if [[ -f "${CHECKPOINT_PATH}" ]]; then
     EXPERIMENT_NAME="$(basename "$(dirname "$(dirname "${CHECKPOINT_PATH}")")")"
 else
     EXPERIMENT_NAME="$(basename "$(dirname "${CHECKPOINT_PATH}")")"
 fi
+
+if [[ "${DEBUG}" == "true" ]]; then
+    echo "DEBUG mode enabled: n_envs=1, n_rollouts=1, n_video_trials=0, headless=false"
+    N_ENVS=1 N_ROLLOUTS=1 N_VIDEO_TRIALS=0
+fi
+
+HEADLESS_FLAG="--headless"
+[[ "${DEBUG}" == "true" ]] && HEADLESS_FLAG=""
 
 # Collect checkpoints: single file or all .ckpt files in a directory.
 if [[ -f "${CHECKPOINT_PATH}" ]]; then
@@ -66,7 +78,7 @@ for CHECKPOINT in "${CHECKPOINTS[@]}"; do
             --n-action-steps "${N_ACTION_STEPS}" \
             --n-video-trials "${N_VIDEO_TRIALS}" \
             --output-dir "${OUT_DIR}" \
-            --headless; then
+            ${HEADLESS_FLAG}; then
             echo "ERROR: evaluate_model_custom.py failed for action_horizon=${N_ACTION_STEPS}, checkpoint=${CKPT_STEM}" >&2
             continue
         fi

@@ -32,13 +32,12 @@ python src/data_processing/process_pickles.py -f "FURNITURE" -s "scripted" -e "s
 
 Convert `zarr` to diffusion policy format (`<source_zarr_name>_translated/zarr`):
 ```bash
-python src/data_processing/process_zarr.py <PATH>.zarr \
-    --output <PATH>_translated.zarr
+python src/data_processing/process_zarr.py PATH.zarr --output PATH_translated.zarr
 ```
 
 #### Dataset Visualization
 ```bash
-python scripts/visualize_dataset.py <PATH>.zarr
+python scripts/visualize_dataset.py PATH.zarr
 ```
 
 

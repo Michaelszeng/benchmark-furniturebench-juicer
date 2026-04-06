@@ -5,7 +5,8 @@ Usage:
         --checkpoint /path/to/checkpoint.ckpt \
         --furniture one_leg \
         --n-rollouts 10 \
-        --n-envs 1
+        --n-envs 1 \
+        --n-action-steps 1
 """
 
 import argparse

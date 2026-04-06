@@ -236,14 +236,10 @@ def stream_process_and_write_to_zarr(
     current_episode_end = initial_episode_end
 
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        for batch_start in tqdm(
-            range(0, len(pickle_paths), num_threads), desc="Processing and writing files"
-        ):
+        for batch_start in tqdm(range(0, len(pickle_paths), num_threads), desc="Processing and writing files"):
             batch_paths = pickle_paths[batch_start : batch_start + num_threads]
             futures = [
-                executor.submit(
-                    process_pickle_file, path, noop_threshold, calculate_pos_action_from_delta
-                )
+                executor.submit(process_pickle_file, path, noop_threshold, calculate_pos_action_from_delta)
                 for path in batch_paths
             ]
             for future in futures:
@@ -262,7 +258,6 @@ if __name__ == "__main__":
         "--source",
         "-s",
         type=str,
-        choices=["scripted", "rollout", "teleop", "augmentation"],
         default=None,
         nargs="+",
     )

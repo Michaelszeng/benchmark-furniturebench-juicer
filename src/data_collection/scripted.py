@@ -32,6 +32,11 @@ if __name__ == "__main__":
         choices=["all", "success", "failure"],
         help="Save MP4 videos for the specified episode outcomes (all / success / failure). Omit to disable.",
     )
+    parser.add_argument(
+        "--no-noise",
+        action="store_true",
+        help="Disable all target and action noise in the scripted policy.",
+    )
 
     args = parser.parse_args()
 
@@ -42,12 +47,10 @@ if __name__ == "__main__":
     #     obs_type = obs_type + "_highres"
     resize_sim_img = False
 
-    demo_source = "scripted" if not args.output_dir_suffix else f"scripted_{args.output_dir_suffix}"
-
     data_path = trajectory_save_dir(
         environment="sim",
         task=args.furniture,
-        demo_source=demo_source,
+        demo_source="scripted" if not args.output_dir_suffix else f"scripted_{args.output_dir_suffix}",
         randomness=args.randomness,
     )
 
@@ -72,6 +75,7 @@ if __name__ == "__main__":
         compress_pickles=True,
         non_markovian=args.non_markovian,
         record_video=args.record_video,
+        no_noise=args.no_noise,
     )
 
     collector.collect()

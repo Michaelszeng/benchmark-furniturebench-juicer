@@ -50,6 +50,7 @@ class DataCollector:
         verbose: bool = False,
         non_markovian: bool = False,
         record_video: str = None,
+        no_noise: bool = False,
     ):
         """
         Args:
@@ -86,6 +87,7 @@ class DataCollector:
                 compute_device_id=compute_device_id,
                 graphics_device_id=graphics_device_id,
                 ctrl_mode=ctrl_mode,
+                no_noise=no_noise,
             )
         else:
             if randomness == "med":

@@ -145,6 +145,20 @@ def _write_summary(n_success: int, n_total: int, trial_records: list, summary_pa
         f.write(f"Avg trial steps  : {avg_steps:.1f}\n")
 
 
+def _repair_csv_and_summary_from_pkl_data(pkl_path: Path):
+    """Rewrite results.csv and summary.txt to match results.pkl; return (csv_file, csv_writer)."""
+    saved = pickle.load(open(pkl_path, "rb"))
+    out_dir, fields = pkl_path.parent, ["trial", "result", "reward", "trial_time"]
+    csv_path = out_dir / "results.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(saved["trials"])
+    _write_summary(saved["n_success"], saved["n_total"], saved["trials"], out_dir / "summary.txt")
+    csv_file = open(csv_path, "a", newline="")
+    return csv_file, csv.DictWriter(csv_file, fieldnames=fields)
+
+
 @torch.no_grad()
 def run_rollout(
     env,
@@ -273,7 +287,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-dir", type=str, default=None, help="Directory to write results (default: outputs/<date>/<time>)"
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Resume from an existing results.pkl in --output-dir (requires --output-dir)",
+    )
     args = parser.parse_args()
+
+    if args.resume and args.output_dir is None:
+        parser.error("--resume requires --output-dir to be specified")
 
     device = torch.device(args.device)
 
@@ -313,21 +336,49 @@ if __name__ == "__main__":
     if args.save_video:
         videos_dir.mkdir(parents=True, exist_ok=True)
 
+    # --- state initialization (fresh or resumed) ---
     n_success = 0
     n_total = 0
-    n_rounds = max(1, math.ceil(args.n_rollouts / args.n_envs))
     all_trial_records = []  # list of dicts, one per env per round
+    resuming = False
+
+    if args.resume:
+        pkl_path = out_dir / "results.pkl"
+        if pkl_path.exists():
+            with open(pkl_path, "rb") as f:
+                saved = pickle.load(f)
+            if saved.get("n_total", 0) > 0:
+                n_success = saved["n_success"]
+                n_total = saved["n_total"]
+                all_trial_records = saved["trials"]
+                resuming = True
+            else:
+                print(f"Found results.pkl at {pkl_path} but no completed trials; starting fresh.")
+        else:
+            print(f"--resume set but no results.pkl found in {out_dir}; starting fresh.")
+
+    n_rounds = max(1, math.ceil(args.n_rollouts / args.n_envs))
+    # Round to start from: skip rounds already covered by resumed state.
+    i_start = math.ceil(n_total / args.n_envs)
 
     csv_path = out_dir / "results.csv"
     csv_fields = ["trial", "result", "reward", "trial_time"]
-    csv_file = open(csv_path, "w", newline="")
-    csv_writer = csv.DictWriter(csv_file, fieldnames=csv_fields)
-    csv_writer.writeheader()
-    csv_file.flush()
-
     summary_path = out_dir / "summary.txt"
 
-    for i in range(n_rounds):
+    if resuming:
+        print(
+            f"Resuming: {n_total}/{args.n_rollouts} trials done"
+            f" ({n_success} successes, {n_success / n_total:.1%});"
+            f" starting from round {i_start + 1}/{n_rounds}"
+        )
+        csv_file, csv_writer = _repair_csv_and_summary_from_pkl_data(pkl_path)
+    else:
+        csv_file = open(csv_path, "w", newline="")
+        csv_writer = csv.DictWriter(csv_file, fieldnames=csv_fields)
+        csv_writer.writeheader()
+        csv_file.flush()
+
+    for i in range(i_start, n_rounds):
         t_start = time.time()
         video_budget = args.n_video_trials if args.n_video_trials >= 0 else args.n_rollouts
         record_this_round = args.save_video and (n_total < video_budget)
@@ -360,43 +411,45 @@ if __name__ == "__main__":
 
             csv_writer.writerow(record)
             csv_file.flush()
-            _write_summary(n_success, n_total, all_trial_records, summary_path)
 
             if record_this_round and trial_num <= video_budget:
                 video_path = videos_dir / f"trial_{trial_num:04d}_{result_str}.mp4"
                 _write_mp4(round_result["frames"][env_idx], video_path)
                 print(f"  Saved video: {video_path.name}")
 
-        rate = n_success / n_total
+        # Write text summary file
+        _write_summary(n_success, n_total, all_trial_records, summary_path)
+
+        # Write intermediate pickle after every round
+        pkl_path = out_dir / "results.pkl"
+        with open(pkl_path, "wb") as f:
+            pickle.dump(
+                {
+                    "trials": all_trial_records,
+                    "n_success": n_success,
+                    "n_total": n_total,
+                    "success_rate": n_success / n_total if n_total > 0 else 0.0,
+                    "checkpoint": args.checkpoint,
+                    "furniture": args.furniture,
+                    "randomness": args.randomness,
+                    "n_obs_steps": n_obs_steps,
+                    "rollout_max_steps": rollout_max_steps,
+                },
+                f,
+            )
+
+        success_rate = n_success / n_total
         video_tag = "video=on" if record_this_round else "video=off"
         total_time = time.time() - t_start
         print(
-            f"Round {i + 1}/{n_rounds} [{video_tag}]: rollout time={rollout_time:.1f}s, total time={total_time:.1f}s, result={round_result['result']}  running {n_success}/{n_total} ({rate:.1%})"
+            f"Round {i + 1}/{n_rounds} [{video_tag}]: rollout time={rollout_time:.1f}s, total time={total_time:.1f}s, "
+            f"result={round_result['result']}  running {n_success}/{n_total} ({success_rate:.1%})"
         )
 
     csv_file.close()
 
-    final_rate = n_success / n_total
-    print(f"\nFinal success rate: {n_success}/{n_total} ({final_rate:.1%})")
-
-    # --- write pickle ---
-    pkl_path = out_dir / "results.pkl"
-    with open(pkl_path, "wb") as f:
-        pickle.dump(
-            {
-                "trials": all_trial_records,
-                "n_success": n_success,
-                "n_total": n_total,
-                "success_rate": final_rate,
-                "checkpoint": args.checkpoint,
-                "furniture": args.furniture,
-                "randomness": args.randomness,
-                "n_obs_steps": n_obs_steps,
-                "rollout_max_steps": rollout_max_steps,
-            },
-            f,
-        )
-
+    final_success_rate = n_success / n_total
+    print(f"\nFinal success rate: {n_success}/{n_total} ({final_success_rate:.1%})")
     print(f"Results written to {out_dir}/")
 
     # IsaacGym's C++ destructors segfault during normal Python shutdown.

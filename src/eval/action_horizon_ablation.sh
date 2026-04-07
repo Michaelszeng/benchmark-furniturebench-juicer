@@ -12,17 +12,24 @@
 #
 # Debug mode (1 rollout, 1 env, no video, not headless):
 #   ./src/eval/action_horizon_ablation.sh <checkpoint_or_dir> one_leg --debug
+#
+# Resume a previous run (skips completed checkpoints/horizons):
+#   ./src/eval/action_horizon_ablation.sh <checkpoint_or_dir> one_leg 64 0 500 --resume
 set -euo pipefail
 ulimit -s unlimited
 ulimit -c unlimited
 
-CHECKPOINT_PATH="${1:?Usage: $0 <checkpoint_or_dir> [furniture] [n_envs] [n_video_trials] [n_rollouts] [--debug]}"
+CHECKPOINT_PATH="${1:?Usage: $0 <checkpoint_or_dir> [furniture] [n_envs] [n_video_trials] [n_rollouts] [--debug] [--resume]}"
 FURNITURE="${2:-one_leg}"
 N_ENVS="${3:-1}"
 N_VIDEO_TRIALS="${4:-0}"
 N_ROLLOUTS="${5:-500}"
 DEBUG=false
-for arg in "$@"; do [[ "${arg}" == "--debug" ]] && DEBUG=true && break; done
+RESUME=false
+for arg in "$@"; do
+    [[ "${arg}" == "--debug" ]] && DEBUG=true
+    [[ "${arg}" == "--resume" ]] && RESUME=true
+done
 
 # Derive experiment name from the directory before "checkpoints/".
 if [[ -f "${CHECKPOINT_PATH}" ]]; then
@@ -38,6 +45,8 @@ fi
 
 HEADLESS_FLAG="--headless"
 [[ "${DEBUG}" == "true" ]] && HEADLESS_FLAG=""
+RESUME_FLAG=""
+[[ "${RESUME}" == "true" ]] && RESUME_FLAG="--resume"
 
 # Collect checkpoints: single file or all .ckpt files in a directory.
 if [[ -f "${CHECKPOINT_PATH}" ]]; then
@@ -78,6 +87,7 @@ for CHECKPOINT in "${CHECKPOINTS[@]}"; do
             --n-action-steps "${N_ACTION_STEPS}" \
             --n-video-trials "${N_VIDEO_TRIALS}" \
             --output-dir "${OUT_DIR}" \
+            ${RESUME_FLAG} \
             ${HEADLESS_FLAG}; then
             echo "ERROR: evaluate_model_custom.py failed for action_horizon=${N_ACTION_STEPS}, checkpoint=${CKPT_STEM}" >&2
             continue

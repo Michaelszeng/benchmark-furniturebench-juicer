@@ -71,4 +71,4 @@ echo "N_ENVS:          $N_ENVS"
 echo "N_ROLLOUTS:      $N_ROLLOUTS"
 echo "=========================================="
 
-bash src/eval/action_horizon_ablation.sh "${CHECKPOINT_PATH}" "${FURNITURE}" "${N_ENVS}" "${N_VIDEO_TRIALS}" "${N_ROLLOUTS}" "${EXPERIMENT_NAME}"
+bash src/eval/action_horizon_ablation.sh "${CHECKPOINT_PATH}" "${FURNITURE}" "${N_ENVS}" "${N_VIDEO_TRIALS}" "${N_ROLLOUTS}" --resume

@@ -6,6 +6,7 @@ No gravity, no collisions, just freedom to move the parts around.
 import argparse
 import time
 
+import furniture_bench.controllers.control_utils as C
 import furniture_bench.utils.transform as T
 import gym
 import numpy as np
@@ -100,6 +101,23 @@ def main():
     # Actually, we can just reset the part's velocity to 0 every step.
 
     while True:
+        # # Tip (screw threads) is 0.05625 m in the -local-Y direction from the
+        # # mesh origin. The local-Y column (col 1) of the rotation matrix gives
+        # # the upward direction of the leg when inserted; the tip points down.
+        # # Note: find_leg_pose_x_look_front only rotates about local-Y, so it
+        # # preserves col 1 — safe to read directly from leg_pose_robot here.
+        # LEG_TIP_OFFSET = 0.05625
+
+        # leg_part = next((p for p in env.furniture.parts if "leg4" in p.name), None)
+        # if leg_part is not None:
+        #     leg_rb = env.rb_states[env.part_idxs[leg_part.name]][0]
+        #     leg_pose = C.to_homogeneous(leg_rb[:3], C.quat2mat(leg_rb[3:7]))
+        #     leg_pose = env.sim_to_april_mat @ leg_pose
+        #     leg_pose_robot = env.april_to_robot_mat @ leg_pose
+        #     leg_tip_xy = leg_pose_robot[:2, 3] - leg_pose_robot[:2, 1] * LEG_TIP_OFFSET
+        #     print(f"leg_tip_xy: {leg_tip_xy}")
+        #     print(f"leg_com xy: {leg_pose_robot[:2, 3]}")
+
         # Get action from keyboard (deltas)
         # use_quat=False returns euler angles for rotation
         action, collect_enum = keyboard.get_action(use_quat=False)

@@ -18,21 +18,8 @@ python src/data_collection/puppeteer.py -f "FURNITURE"
 
 #### Scripted Data
 
-Run Scripted Policy (to generate `.pkl.xz` files) (`N` is the number of successful demos to record):
 ```bash
-python src/data_collection/scripted.py -f "FURNITURE" -n N --record-video "failure"
-```
-
-Convert `.pkl.xz` to `.zarr`:
-```bash
-python src/data_processing/process_pickles.py -f "FURNITURE" -s "scripted" -e "sim"
-```
-
-#### Convert to Training Format
-
-Convert `zarr` to diffusion policy format (`<source_zarr_name>_translated/zarr`):
-```bash
-python src/data_processing/process_zarr.py PATH.zarr --output PATH_translated.zarr
+./src/data_collection/collect_scripted.sh
 ```
 
 #### Dataset Visualization

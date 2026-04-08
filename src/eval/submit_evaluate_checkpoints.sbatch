@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=action_horizon_ablation
+#SBATCH --job-name=evaluate_checkpoints
 #SBATCH --account=locomotion
 #SBATCH --partition=vision-shared-rtx3090
 #SBATCH --qos=shared-if-available
@@ -14,11 +14,11 @@
 #SBATCH --requeue
 
 # Usage:
-#   sbatch src/eval/submit_action_horizon_ablation_csail.sbatch
+#   sbatch src/eval/submit_evaluate_checkpoints.sbatch <action_horizon>
 #
-# Runs 500 rollouts for each action horizon in [1,2,3,4,6,7,8,10,12,15],
-# for every checkpoint found under CHECKPOINT_PATH (file or directory).
-# Results are written to: outputs/<experiment_name>/T_a_<x>/<checkpoint_stem>/
+# SLRUM runner for `evaluate_checkpoints.sh`.
+
+ACTION_HORIZON="${1:?Usage: sbatch src/eval/submit_evaluate_checkpoints.sbatch <action_horizon>}"
 
 DATE=$(date +"%Y-%m-%d")
 TIME=$(date +"%H-%M-%S")
@@ -29,8 +29,12 @@ echo "TIME: $TIME"
 # Evaluation parameters
 # ============================================================================
 # path to a .ckpt file or a directory of .ckpt files
-# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints"
-CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_teleop/checkpoints"
+CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_v2_dataset/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_no_pressure/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_screw_z_pressure/checkpoints"
+
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_teleop/checkpoints"
 FURNITURE="one_leg"
 N_ENVS=64
 N_ROLLOUTS=500
@@ -67,8 +71,9 @@ export LD_LIBRARY_PATH=/data/locomotion/michzeng/mamba/envs/py38/lib:${LD_LIBRAR
 
 echo "CHECKPOINT_PATH: $CHECKPOINT_PATH"
 echo "FURNITURE:       $FURNITURE"
+echo "ACTION_HORIZON:  $ACTION_HORIZON"
 echo "N_ENVS:          $N_ENVS"
 echo "N_ROLLOUTS:      $N_ROLLOUTS"
 echo "=========================================="
 
-bash src/eval/action_horizon_ablation.sh "${CHECKPOINT_PATH}" "${FURNITURE}" "${N_ENVS}" "${N_VIDEO_TRIALS}" "${N_ROLLOUTS}" --resume
+bash src/eval/evaluate_checkpoints.sh "${CHECKPOINT_PATH}" "${FURNITURE}" "${ACTION_HORIZON}" "${N_ENVS}" "${N_VIDEO_TRIALS}" "${N_ROLLOUTS}" --resume

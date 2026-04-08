@@ -1,29 +1,30 @@
 #!/usr/bin/env bash
-# Runs 500 rollouts for each action horizon in [1,2,3,4,6,7,8,10,12,15],
+# Runs N rollouts for a single given action horizon,
 # for every checkpoint found under the given path (file or directory).
 # Results are written to: outputs/<experiment_name>/T_a_<x>/<checkpoint_stem>/
 # The experiment name is derived from the directory before "checkpoints/".
 #
 # Example usage (single checkpoint):
-#   ./src/eval/action_horizon_ablation.sh /home/michzeng/diffusion-policy/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints/epoch=095-val_loss=0.0659-val_ddim_mse=0.015579.ckpt one_leg 64 0 500
+#   ./src/eval/evaluate_checkpoints.sh /path/to/checkpoints/epoch=095.ckpt one_leg 8 64 0 500
 #
 # Example usage (directory of checkpoints):
-#   ./src/eval/action_horizon_ablation.sh /home/michzeng/diffusion-policy/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints/ one_leg 64 0 500
+#   ./src/eval/evaluate_checkpoints.sh /path/to/checkpoints/ one_leg 8 64 0 500
 #
 # Debug mode (1 rollout, 1 env, no video, not headless):
-#   ./src/eval/action_horizon_ablation.sh <checkpoint_or_dir> one_leg --debug
+#   ./src/eval/evaluate_checkpoints.sh <checkpoint_or_dir> one_leg 8 --debug
 #
-# Resume a previous run (skips completed checkpoints/horizons):
-#   ./src/eval/action_horizon_ablation.sh <checkpoint_or_dir> one_leg 64 0 500 --resume
+# Resume a previous run (skips completed checkpoints):
+#   ./src/eval/evaluate_checkpoints.sh <checkpoint_or_dir> one_leg 8 64 0 500 --resume
 set -euo pipefail
 ulimit -s unlimited
 ulimit -c unlimited
 
-CHECKPOINT_PATH="${1:?Usage: $0 <checkpoint_or_dir> [furniture] [n_envs] [n_video_trials] [n_rollouts] [--debug] [--resume]}"
+CHECKPOINT_PATH="${1:?Usage: $0 <checkpoint_or_dir> [furniture] <n_action_steps> [n_envs] [n_video_trials] [n_rollouts] [--debug] [--resume]}"
 FURNITURE="${2:-one_leg}"
-N_ENVS="${3:-1}"
-N_VIDEO_TRIALS="${4:-0}"
-N_ROLLOUTS="${5:-500}"
+N_ACTION_STEPS="${3:?Usage: $0 <checkpoint_or_dir> [furniture] <n_action_steps> [n_envs] [n_video_trials] [n_rollouts] [--debug] [--resume]}"
+N_ENVS="${4:-1}"
+N_VIDEO_TRIALS="${5:-0}"
+N_ROLLOUTS="${6:-500}"
 DEBUG=false
 RESUME=false
 for arg in "$@"; do
@@ -69,28 +70,23 @@ echo "Checkpoints found: ${#CHECKPOINTS[@]}"
 
 for CHECKPOINT in "${CHECKPOINTS[@]}"; do
     CKPT_STEM="$(basename "${CHECKPOINT}" .ckpt)"
+    OUT_DIR="${BASE_OUT}/T_a_${N_ACTION_STEPS}/${CKPT_STEM}"
     echo ""
     echo "########################################## "
     echo "Checkpoint: ${CKPT_STEM}"
+    echo "Action horizon: ${N_ACTION_STEPS}  ->  ${OUT_DIR}"
     echo "##########################################"
-
-    for N_ACTION_STEPS in 1 2 3 4 5 6 8 10 12 15; do
-        OUT_DIR="${BASE_OUT}/T_a_${N_ACTION_STEPS}/${CKPT_STEM}"
-        echo "=========================================="
-        echo "Action horizon: ${N_ACTION_STEPS}  ->  ${OUT_DIR}"
-        echo "=========================================="
-        if ! python src/eval/evaluate_model_custom.py \
-            --checkpoint "${CHECKPOINT}" \
-            --furniture "${FURNITURE}" \
-            --n-rollouts "${N_ROLLOUTS}" \
-            --n-envs "${N_ENVS}" \
-            --n-action-steps "${N_ACTION_STEPS}" \
-            --n-video-trials "${N_VIDEO_TRIALS}" \
-            --output-dir "${OUT_DIR}" \
-            ${RESUME_FLAG} \
-            ${HEADLESS_FLAG}; then
-            echo "ERROR: evaluate_model_custom.py failed for action_horizon=${N_ACTION_STEPS}, checkpoint=${CKPT_STEM}" >&2
-            continue
-        fi
-    done
+    if ! python src/eval/evaluate_model_custom.py \
+        --checkpoint "${CHECKPOINT}" \
+        --furniture "${FURNITURE}" \
+        --n-rollouts "${N_ROLLOUTS}" \
+        --n-envs "${N_ENVS}" \
+        --n-action-steps "${N_ACTION_STEPS}" \
+        --n-video-trials "${N_VIDEO_TRIALS}" \
+        --output-dir "${OUT_DIR}" \
+        ${RESUME_FLAG} \
+        ${HEADLESS_FLAG}; then
+        echo "ERROR: evaluate_model_custom.py failed for action_horizon=${N_ACTION_STEPS}, checkpoint=${CKPT_STEM}" >&2
+        continue
+    fi
 done

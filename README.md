@@ -16,6 +16,21 @@ python src/data_collection/puppeteer.py -f "FURNITURE"
 
 ### Data Generation
 
+#### Published Datasets
+
+Download data, place into `dataset`: https://drive.google.com/drive/folders/13UqtMLXY1_8JCQOZf3j-YbZyMRTsgZ2K
+
+Truncate each episode so they do not contain data after success is achieved:
+```bash
+python -m src.data_processing.truncate_at_success dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success.zarr --output dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success_truncated.zarr
+```
+
+Convert to Training Format:
+```bash
+python src/data_processing/process_zarr.py dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success_truncated.zarr --output dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success_truncated_translated.zarr
+```
+
+
 #### Scripted Data
 
 ```bash

@@ -25,35 +25,47 @@ import gym
 import imageio
 import numpy as np
 import torch
-import torchvision.transforms.functional as TF
+from furniture_bench.envs.observation import DEFAULT_STATE_OBS, DEFAULT_VISUAL_OBS
+from furniture_bench.sim_config import sim_config
 from omegaconf import OmegaConf
-from torchvision.transforms import InterpolationMode
 
 from src.common.geometry import proprioceptive_quat_to_6d_rotation
 from src.common.tasks import task_timeout
+from src.data_processing.utils import resize, resize_crop
 
 # Register the "eval" resolver used in diffusion_policy configs.
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 
-def preprocess_images(imgs: torch.Tensor) -> torch.Tensor:
-    """Convert (B, H, W, 3) uint8 → (B, 3, 224, 224) float [0, 1]."""
-    imgs = imgs.float() / 255.0
-    imgs = imgs.permute(0, 3, 1, 2)  # (B, H, W, 3) -> (B, 3, H, W)
-    imgs = TF.resize(imgs, [224, 224], interpolation=InterpolationMode.BILINEAR, antialias=True)
-    return imgs
+# def preprocess_images(imgs: torch.Tensor) -> torch.Tensor:
+#     """Convert (B, H, W, 3) uint8 → (B, 3, 224, 224) float [0, 1]."""
+#     imgs = imgs.float() / 255.0
+#     imgs = imgs.permute(0, 3, 1, 2)  # (B, H, W, 3) -> (B, 3, H, W)
+#     imgs = TF.resize(imgs, [224, 224], interpolation=InterpolationMode.BILINEAR, antialias=True)
+#     return imgs
 
 
-def preprocess_obs(obs: dict, device: torch.device) -> dict:
-    """Transform one env step obs into the format expected by the policy.
-
-    Returns dict with keys color_image1, color_image2, robot_state — all on
-    ``device`` with float dtype.
+def preprocess_obs(obs: dict, device: torch.device, obs_keys: set) -> dict:
     """
-    img1 = preprocess_images(obs["color_image1"]).to(device)
-    img2 = preprocess_images(obs["color_image2"]).to(device)
-    robot_state = proprioceptive_quat_to_6d_rotation(obs["robot_state"].float().to(device))
-    return {"color_image1": img1, "color_image2": img2, "robot_state": robot_state}
+    Handles both image-based policies (color_image1, color_image2, robot_state)
+    and state-based policies (robot_state, parts_poses).
+
+    Args:
+        obs: raw observation dict from env.step / env.reset.
+        device: torch device to move tensors to.
+        obs_keys: set of observation key names the policy expects
+                  (from cfg.shape_meta.obs).
+    """
+    result = {"robot_state": proprioceptive_quat_to_6d_rotation(obs["robot_state"].float().to(device))}
+    if "color_image1" in obs_keys:
+        # resize() matches data_collector.py: 1280x720 → 320x240, same FOV.
+        result["color_image1"] = resize(obs["color_image1"]).float().to(device)
+    if "color_image2" in obs_keys:
+        # resize_crop() matches data_collector.py: 1280x720 → 320x240 center-crop.
+        result["color_image2"] = resize_crop(obs["color_image2"]).float().to(device)
+    if "parts_poses" in obs_keys:
+        result["parts_poses"] = obs["parts_poses"].float().to(device)
+    return result
 
 
 def build_obs_dict(obs_deque: collections.deque, device: torch.device) -> dict:
@@ -121,6 +133,12 @@ def load_policy(checkpoint_path: str, device: torch.device):
 
     policy.set_normalizer(normalizer)
     policy.to(device).eval()
+    # Explicitly set obs_encoder to eval mode: R3M's ResNet18 uses BatchNorm, which
+    # behaves catastrophically in training mode with the small batch sizes (n_obs_steps=2)
+    # typical at inference time. policy.eval() should propagate here, but this is a
+    # belt-and-suspenders guard in case something in the load path leaves it in train mode.
+    if hasattr(policy, "obs_encoder"):
+        policy.obs_encoder.eval()
     return policy, cfg
 
 
@@ -166,6 +184,7 @@ def run_rollout(
     n_obs_steps: int,
     rollout_max_steps: int,
     device: torch.device,
+    obs_keys: set,
     record_video: bool = False,
     n_action_steps: int = None,
 ) -> dict:
@@ -181,7 +200,7 @@ def run_rollout(
     """
     n_envs = env.num_envs
     obs = env.reset()
-    preprocessed = preprocess_obs(obs, device)
+    preprocessed = preprocess_obs(obs, device, obs_keys)
     obs_deque = collections.deque([preprocessed] * n_obs_steps, maxlen=n_obs_steps)
     action_queue: collections.deque = collections.deque()
 
@@ -220,7 +239,7 @@ def run_rollout(
                 side_by_side = np.concatenate([imgs1[env_idx], imgs2[env_idx]], axis=1)
                 frame_buffers[env_idx].append(side_by_side)
 
-        preprocessed = preprocess_obs(obs, device)
+        preprocessed = preprocess_obs(obs, device, obs_keys)
         obs_deque.append(preprocessed)
         step += 1
 
@@ -308,14 +327,34 @@ if __name__ == "__main__":
         f"n_obs_steps={n_obs_steps}, n_action_steps={'from_cfg' if n_action_steps is None else n_action_steps}, furniture={args.furniture}, n_envs={args.n_envs}"
     )
 
-    rollout_max_steps = task_timeout(args.furniture)
+    # Detect policy modality from shape_meta and configure env obs accordingly.
+    policy_obs_keys = set(cfg.shape_meta.obs.keys())
+    is_image_based = "color_image1" in policy_obs_keys
+    env_obs_keys = DEFAULT_VISUAL_OBS if is_image_based else DEFAULT_STATE_OBS
+    print(f"Policy type: {'image-based' if is_image_based else 'state-based'} (obs keys: {sorted(policy_obs_keys)})")
+
+    if args.save_video and not is_image_based:
+        print("Warning: --save-video requires camera observations; disabling for state-based policy.")
+        args.save_video = False
+
+    # Use the same timeout that scripted data collection uses (sim_config["scripted_timeout"]),
+    # falling back to task_timeout for tasks not listed there.
+    rollout_max_steps = sim_config["scripted_timeout"].get(args.furniture, task_timeout(args.furniture))
     print(f"Creating env (furniture={args.furniture}, max_steps={rollout_max_steps})")
+    np.random.seed(42)
+    # Image-based policies were trained on 1280x720 images captured with the wide
+    # FOV (69.4°), then manually resized/cropped to 320x240 (see data_collector.py).
+    # Setting resize_img=False replicates that setup: the env returns full-res images
+    # and preprocess_obs applies the same resize/resize_crop.  State-based policies
+    # don't render cameras at all, so resize_img has no effect for them.
     env = gym.make(
         "FurnitureSim-v0",
         furniture=args.furniture,
         max_env_steps=rollout_max_steps,
         headless=args.headless,
         num_envs=args.n_envs,
+        obs_keys=env_obs_keys,
+        resize_img=False,
         np_step_out=False,
         channel_first=False,
         act_rot_repr="rot_6d",
@@ -388,6 +427,7 @@ if __name__ == "__main__":
             n_obs_steps=n_obs_steps,
             rollout_max_steps=rollout_max_steps,
             device=device,
+            obs_keys=policy_obs_keys,
             record_video=record_this_round,
             n_action_steps=n_action_steps,
         )

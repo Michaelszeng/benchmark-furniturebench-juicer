@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 import gym
+import numpy as np
 import torch
 from furniture_bench.data.collect_enum import CollectEnum
 from furniture_bench.device.device_interface import DeviceInterface
@@ -72,6 +73,7 @@ class DataCollector:
             compress_pickles (bool): Whether to compress the pickle files with gzip.
             record_video (str | None): Which episodes to save as MP4. One of "all", "success", "failure", or None (no video).
         """
+        np.random.seed(2043961395)
         if is_sim:
             self.env = gym.make(
                 "FurnitureSimFull-v0",
@@ -353,7 +355,7 @@ class DataCollector:
         demo_path = self.data_path / ("success" if data["success"] else "failure")
         demo_path.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         pkl_path = demo_path / f"{timestamp}.pkl"
         if self.compress_pickles:
             pkl_path = pkl_path.with_suffix(".pkl.xz")

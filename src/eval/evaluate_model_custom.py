@@ -276,8 +276,9 @@ def run_rollout(
         if len(action_queue) == 0:
             obs_dict = build_obs_dict(obs_deque, device)
             result = policy.predict_action(obs_dict, use_DDIM=True)
-            actions = result["action_pred"]
-            n_steps = n_action_steps if n_action_steps is not None else actions.shape[1]
+            start = n_obs_steps - 1
+            actions = result["action_pred"][:, start:]
+            n_steps = n_action_steps if n_action_steps is not None else policy.n_action_steps
             for t in range(n_steps):
                 action_queue.append(actions[:, t, :])
 
@@ -289,15 +290,16 @@ def run_rollout(
         newly_done = done.squeeze(-1) & (done_step == -1)
         done_step[newly_done] = step
 
+        preprocessed = preprocess_obs(obs, device, obs_keys)
+
         if record_video:
-            # obs images are (n_envs, H, W, 3) uint8 tensors on GPU.
-            imgs1 = obs["color_image1"].cpu().numpy()  # (n_envs, H, W, 3)
-            imgs2 = obs["color_image2"].cpu().numpy()
+            # use the resized/cropped images from preprocessed
+            imgs1 = preprocessed["color_image1"].cpu().numpy().astype(np.uint8)
+            imgs2 = preprocessed["color_image2"].cpu().numpy().astype(np.uint8)
             for env_idx in range(n_envs):
                 side_by_side = np.concatenate([imgs1[env_idx], imgs2[env_idx]], axis=1)
                 frame_buffers[env_idx].append(side_by_side)
 
-        preprocessed = preprocess_obs(obs, device, obs_keys)
         obs_deque.append(preprocessed)
         step += 1
 

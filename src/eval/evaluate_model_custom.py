@@ -356,6 +356,12 @@ if __name__ == "__main__":
         help="Save videos for only the first N trials (default: 20). Set to -1 to save all.",
     )
     parser.add_argument(
+        "--record-failures",
+        action="store_true",
+        default=False,
+        help="If set, only save videos of failed trials, and save all of them (overrides --n-video-trials).",
+    )
+    parser.add_argument(
         "--n-action-steps",
         type=int,
         default=None,
@@ -533,7 +539,10 @@ if __name__ == "__main__":
     for i in range(i_start, n_rounds):
         t_start = time.time()
         video_budget = args.n_video_trials if args.n_video_trials >= 0 else args.n_rollouts
-        record_this_round = args.save_video and (n_total < video_budget)
+        if args.record_failures:
+            record_this_round = args.save_video
+        else:
+            record_this_round = args.save_video and (n_total < video_budget)
         # If using dataset initial states, cycle through them round by round.
         round_init_states = None
         if dataset_init_states is not None:
@@ -574,10 +583,18 @@ if __name__ == "__main__":
             csv_writer.writerow(record)
             csv_file.flush()
 
-            if record_this_round and trial_num <= video_budget:
-                video_path = videos_dir / f"trial_{trial_num:04d}_{result_str}.mp4"
-                _write_mp4(round_result["frames"][env_idx], video_path)
-                print(f"  Saved video: {video_path.name}")
+            if record_this_round:
+                save_this_video = False
+                if args.record_failures:
+                    if result_str != "success":
+                        save_this_video = True
+                elif trial_num <= video_budget:
+                    save_this_video = True
+                
+                if save_this_video:
+                    video_path = videos_dir / f"trial_{trial_num:04d}_{result_str}.mp4"
+                    _write_mp4(round_result["frames"][env_idx], video_path)
+                    print(f"  Saved video: {video_path.name}")
 
         # Write text summary file
         _write_summary(n_success, n_total, all_trial_records, summary_path)

@@ -32,6 +32,7 @@ from omegaconf import OmegaConf
 from src.common.geometry import proprioceptive_quat_to_6d_rotation
 from src.common.tasks import task_timeout
 from src.data_processing.utils import resize, resize_crop
+from src.visualization.render_mp4 import unpickle_data
 
 # Register the "eval" resolver used in diffusion_policy configs.
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -177,6 +178,59 @@ def _repair_csv_and_summary_from_pkl_data(pkl_path: Path):
     return csv_file, csv.DictWriter(csv_file, fieldnames=fields)
 
 
+def load_dataset_init_states(dataset_path: str):
+    """Load the first observation from pkl file(s) at dataset_path.
+
+    dataset_path may be a single .pkl/.pkl.xz file or a directory containing
+    such files.  Returns a list of raw obs dicts (robot_state dict +
+    parts_poses array), matching the format expected by env.reset_to().
+    """
+    p = Path(dataset_path)
+    if p.is_file():
+        pkl_paths = [p]
+    else:
+        pkl_paths = sorted(p.glob("*.pkl*"))
+    if not pkl_paths:
+        raise FileNotFoundError(f"No pkl files found at {dataset_path}")
+    states = []
+    for pkl_path in pkl_paths:
+        data = unpickle_data(pkl_path)
+        states.append(data["observations"][0])
+        break
+    print(f"Loaded {len(states)} initial states from {dataset_path}")
+    return states
+
+
+def reset_to_dataset_states(env, states):
+    """Reset all envs to the given dataset states and return observations.
+
+    Replicates the refresh + zero-torque sequence that env.reset() performs,
+    which reset_to() itself skips.
+    """
+    from isaacgym import gymtorch
+
+    # Call env.reset() first so the gym.Wrapper bookkeeping is satisfied
+    # (it raises "Cannot call step() before reset()" otherwise), then
+    # immediately override the random initial state with our dataset states.
+    env.reset()
+
+    # env is a gym.Wrapper; the actual FurnitureSimEnv sits at env.unwrapped.
+    sim = env.unwrapped
+
+    sim.reset_to(states)  # sets dof state + root state for each env
+
+    # Mimic env.reset(): apply zero torques then refresh so Isaac Gym registers
+    # the new state before we read back observations.
+    if sim.ctrl_mode == "osc":
+        torque_action = torch.zeros_like(sim.dof_pos)
+        sim.isaac_gym.set_dof_actuation_force_tensor(sim.sim, gymtorch.unwrap_tensor(torque_action))
+    sim.refresh()
+    sim.furniture.reset()
+    sim.scripted_timeout = False
+    sim.refresh()
+    return sim._get_observation()
+
+
 @torch.no_grad()
 def run_rollout(
     env,
@@ -187,6 +241,7 @@ def run_rollout(
     obs_keys: set,
     record_video: bool = False,
     n_action_steps: int = None,
+    init_states: list = None,
 ) -> dict:
     """Run one round of parallel rollouts.
 
@@ -199,7 +254,10 @@ def run_rollout(
                      each element is a list of (H, W*2, 3) uint8 frames (cam1 | cam2)
     """
     n_envs = env.num_envs
-    obs = env.reset()
+    if init_states is not None:
+        obs = reset_to_dataset_states(env, init_states)
+    else:
+        obs = env.reset()
     preprocessed = preprocess_obs(obs, device, obs_keys)
     obs_deque = collections.deque([preprocessed] * n_obs_steps, maxlen=n_obs_steps)
     action_queue: collections.deque = collections.deque()
@@ -312,10 +370,22 @@ if __name__ == "__main__":
         default=False,
         help="Resume from an existing results.pkl in --output-dir (requires --output-dir)",
     )
+    parser.add_argument(
+        "--dataset-dir",
+        type=str,
+        default=None,
+        help="(Testing) Path to a single .pkl/.pkl.xz file or a directory of such "
+        "files; resets each rollout to their initial observations instead of random "
+        "env.reset().",
+    )
     args = parser.parse_args()
 
     if args.resume and args.output_dir is None:
         parser.error("--resume requires --output-dir to be specified")
+
+    dataset_init_states = None
+    if args.dataset_dir is not None:
+        dataset_init_states = load_dataset_init_states(args.dataset_dir)
 
     device = torch.device(args.device)
 
@@ -363,6 +433,49 @@ if __name__ == "__main__":
         randomness=args.randomness,
         concat_robot_state=True,
     )
+
+    # --- obs diagnostic (only when --dataset-dir is set) ---
+    if dataset_init_states is not None and not is_image_based:
+        import zarr as _zarr
+        _diag_zarr_path = str(cfg.task.dataset.zarr_configs[0].path)
+        print(f"\n=== OBS DIAGNOSTIC ===")
+        print(f"Training zarr: {_diag_zarr_path}")
+
+        # Print normalizer ranges for obs keys
+        for _k in sorted(policy_obs_keys):
+            _p = policy.normalizer[_k].params_dict
+            print(f"  normalizer[{_k}]: input_min={_p.input_stats.min[:4].tolist()}..., "
+                  f"input_max={_p.input_stats.max[:4].tolist()}...")
+
+        # Get first obs from env after reset_to_dataset_states
+        _env_obs = reset_to_dataset_states(env, dataset_init_states[:args.n_envs])
+        _env_rs = proprioceptive_quat_to_6d_rotation(_env_obs["robot_state"].float().to(device))[0]  # (16,)
+        _env_pp = _env_obs["parts_poses"].float().to(device)[0]  # (35,)
+        print(f"\n  env robot_state[0][:8]: {_env_rs[:8].tolist()}")
+        print(f"  env parts_poses[0][:7]: {_env_pp[:7].tolist()}")
+
+        # Compare to first timestep from the training zarr
+        _z = _zarr.open(_diag_zarr_path, "r")
+        _zrs = torch.tensor(_z["data/robot_state"][0])   # (16,)
+        _zpp = torch.tensor(_z["data/parts_poses"][0])   # (35,)
+        print(f"\n  zarr robot_state[0][:8]: {_zrs[:8].tolist()}")
+        print(f"  zarr parts_poses[0][:7]: {_zpp[:7].tolist()}")
+
+        _rs_diff = (_env_rs - _zrs).abs().max().item()
+        _pp_diff = (_env_pp - _zpp).abs().max().item()
+        print(f"\n  max abs diff robot_state: {_rs_diff:.6f}")
+        print(f"  max abs diff parts_poses: {_pp_diff:.6f}")
+
+        # Run policy on env obs and print first predicted action
+        _obs_deque = collections.deque(
+            [{"robot_state": _env_rs.unsqueeze(0), "parts_poses": _env_pp.unsqueeze(0)}] * n_obs_steps,
+            maxlen=n_obs_steps,
+        )
+        with torch.no_grad():
+            _pred = policy.predict_action(build_obs_dict(_obs_deque, device), use_DDIM=True)
+        print(f"\n  action_pred[0] (t=0): {_pred['action_pred'][0, 0, :].tolist()}")
+        print(f"  action[0]      (t=1): {_pred['action'][0, 0, :].tolist()}")
+        print(f"=== END DIAGNOSTIC ===\n")
 
     # --- output directory ---
     if args.output_dir is not None:
@@ -421,6 +534,14 @@ if __name__ == "__main__":
         t_start = time.time()
         video_budget = args.n_video_trials if args.n_video_trials >= 0 else args.n_rollouts
         record_this_round = args.save_video and (n_total < video_budget)
+        # If using dataset initial states, cycle through them round by round.
+        round_init_states = None
+        if dataset_init_states is not None:
+            start = (i * args.n_envs) % len(dataset_init_states)
+            round_init_states = [
+                dataset_init_states[(start + e) % len(dataset_init_states)] for e in range(args.n_envs)
+            ]
+
         round_result = run_rollout(
             env=env,
             policy=policy,
@@ -430,6 +551,7 @@ if __name__ == "__main__":
             obs_keys=policy_obs_keys,
             record_video=record_this_round,
             n_action_steps=n_action_steps,
+            init_states=round_init_states,
         )
         rollout_time = time.time() - t_start
 

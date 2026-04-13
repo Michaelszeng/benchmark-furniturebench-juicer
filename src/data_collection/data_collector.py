@@ -1,9 +1,6 @@
-"""Define data collection class that rollout the environment, get action from the interface (e.g., teleoperation, automatic scripts), and save data."""
+"""Define data collection class that rollout the environment, get action from the interface
+(e.g., teleoperation, automatic scripts), and save data."""
 
-import gzip
-import lzma
-import pickle
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -52,6 +49,7 @@ class DataCollector:
         non_markovian: bool = False,
         record_video: str = None,
         no_noise: bool = False,
+        num_envs: int = 1,
     ):
         """
         Args:
@@ -72,6 +70,7 @@ class DataCollector:
             ctrl_mode (str): 'osc' (joint torque, with operation space control) or 'diffik' (joint impedance, with differential inverse kinematics control).
             compress_pickles (bool): Whether to compress the pickle files with gzip.
             record_video (str | None): Which episodes to save as MP4. One of "all", "success", "failure", or None (no video).
+            num_envs (int): Number of parallel Isaac Gym environments. Only supported for scripted sim collection.
         """
         np.random.seed(2043961395)
         if is_sim:
@@ -80,7 +79,7 @@ class DataCollector:
                 furniture=furniture,
                 max_env_steps=sim_config["scripted_timeout"][furniture] if scripted else 3000,
                 headless=headless,
-                num_envs=1,  # Only support 1 for now.
+                num_envs=num_envs,
                 manual_done=False if scripted else True,
                 resize_img=resize_sim_img,
                 np_step_out=False,  # Always output Tensor in this setting. Will change to numpy in this code.
@@ -92,6 +91,8 @@ class DataCollector:
                 no_noise=no_noise,
             )
         else:
+            if num_envs > 1:
+                raise ValueError("num_envs > 1 is only supported for sim (is_sim=True)")
             if randomness == "med":
                 randomness = Randomness.MEDIUM_COLLECT
             elif randomness == "high":
@@ -108,6 +109,7 @@ class DataCollector:
             )
 
         self.is_sim = is_sim
+        self.num_envs = num_envs
         self.data_path = Path(data_path)
         self.device_interface = device_interface
         self.headless = headless
@@ -127,222 +129,204 @@ class DataCollector:
         self.non_markovian = non_markovian
         self.record_video = record_video
 
-        self._reset_collector_buffer()
+        self._reset_all_buffers()
 
     def _verbose_print(self, msg):
         if self.verbose:
             print(msg)
 
-    def collect(self):
-        print("[data collection] Start collecting the data!")
+    # ------------------------------------------------------------------
+    # Buffer helpers
+    # ------------------------------------------------------------------
 
-        obs = self.reset()
-        done = False
-        next_obs = None
+    def _make_empty_buffers(self):
+        return dict(obs=[], org_obs=[], acts=[], rews=[], skills=[], step_counter=0, last_reward_idx=-1, skill_set=[])
 
-        num_saved = lambda: self.num_success + (self.num_fail if self.save_failure else 0)
-        while num_saved() < self.num_demos:
-            # Get an action.
-            if self.scripted:
-                noisy_action, clean_action, skill_complete = self.env.get_assembly_action()
-                pos_bounds_m = 0.02 if self.env.ctrl_mode == "diffik" else 0.025
-                ori_bounds_deg = 15 if self.env.ctrl_mode == "diffik" else 20
-                action = scale_scripted_action(
-                    noisy_action.detach().cpu().clone(),
-                    pos_bounds_m=pos_bounds_m,
-                    ori_bounds_deg=ori_bounds_deg,
-                    device=self.env.device,
-                )
-                record_action = scale_scripted_action(
-                    clean_action.detach().cpu().clone(),
-                    pos_bounds_m=pos_bounds_m,
-                    ori_bounds_deg=ori_bounds_deg,
-                    device=self.env.device,
-                )
-                collect_enum = CollectEnum.DONE_FALSE
+    def _reset_all_buffers(self):
+        self._bufs = [self._make_empty_buffers() for _ in range(self.num_envs)]
+
+    def _reset_env_buffer(self, env_idx: int):
+        self._bufs[env_idx] = self._make_empty_buffers()
+
+    # ------------------------------------------------------------------
+    # Observation helpers
+    # ------------------------------------------------------------------
+
+    def _obs_to_numpy(self, obs: dict, env_idx: int) -> dict:
+        """Extract env_idx's slice from a batched obs dict and convert to numpy."""
+        out = {}
+        for k, v in obs.items():
+            if isinstance(v, dict):
+                out[k] = {k2: v2[env_idx].cpu().numpy() for k2, v2 in v.items()}
+            elif k == "color_image1":
+                out[k] = resize(v[env_idx : env_idx + 1]).squeeze().cpu().numpy()
+            elif k == "color_image2":
+                out[k] = resize_crop(v[env_idx : env_idx + 1]).squeeze().cpu().numpy()
             else:
-                action, collect_enum = self.device_interface.get_action()
-                record_action = action
-                skill_complete = int(collect_enum == CollectEnum.SKILL)
-                if skill_complete == 1:
-                    self.skill_set.append(skill_complete)
+                out[k] = v[env_idx].cpu().numpy()
+        return out
 
-            if collect_enum == CollectEnum.TERMINATE:
-                print("Terminate the program.")
-                break
+    def _store_step(self, env_idx: int, obs_np: dict, record_action, rew_val: float, skill_val):
+        """Append one (obs, action, reward, skill) tuple to env_idx's buffer."""
+        buf = self._bufs[env_idx]
+        buf["org_obs"].append(obs_np.copy())
+        ob = {k: obs_np[k] for k in ["color_image1", "color_image2", "robot_state", "parts_poses"]}
+        buf["obs"].append(ob)
+        if isinstance(record_action, torch.Tensor):
+            record_action = record_action.detach().cpu().numpy()
+        buf["acts"].append(record_action)
+        buf["rews"].append(rew_val)
+        if rew_val == 1:
+            buf["last_reward_idx"] = len(buf["acts"]) - 1
+        buf["skills"].append(int(skill_val))
+        buf["step_counter"] += 1
 
-            # An episode is done.
-            if done or collect_enum in [CollectEnum.SUCCESS, CollectEnum.FAIL]:
-                if self.is_sim:
-                    # Convert it to numpy.
-                    for k, v in next_obs.items():
-                        if isinstance(v, dict):
-                            for k1, v1 in v.items():
-                                v[k1] = v1.squeeze().cpu().numpy()
-                        elif k == "color_image1":
-                            next_obs[k] = resize(next_obs[k]).squeeze().cpu().numpy()
-                        elif k == "color_image2":
-                            next_obs[k] = resize_crop(next_obs[k]).squeeze().cpu().numpy()
-                        else:
-                            next_obs[k] = v.squeeze().cpu().numpy()
+    def _store_terminal_obs(self, env_idx: int, obs: dict):
+        """Append the terminal (post-done) obs to env_idx's buffer."""
+        obs_np = self._obs_to_numpy(obs, env_idx)
+        buf = self._bufs[env_idx]
+        buf["org_obs"].append(obs_np)
+        ob = {k: obs_np[k] for k in ["color_image1", "color_image2", "robot_state", "parts_poses"]}
+        buf["obs"].append(ob)
 
-                self.org_obs.append(next_obs)
+    # ------------------------------------------------------------------
+    # Per-env reset (without resetting all envs)
+    # ------------------------------------------------------------------
 
-                n_ob = {}
-                n_ob["color_image1"] = next_obs["color_image1"]
-                n_ob["color_image2"] = next_obs["color_image2"]
-                n_ob["robot_state"] = next_obs["robot_state"]
-                n_ob["parts_poses"] = next_obs["parts_poses"]
-                self.obs.append(n_ob)
+    def _reset_single_env(self, env_idx: int):
+        """Reset env_idx in-place inside the running simulation."""
+        sim = self.env.unwrapped
+        sim.reset_env(env_idx)
+        if sim.ctrl_mode == "osc":
+            from isaacgym import gymtorch
 
-                if done and not self.env.furnitures[0].all_assembled():
-                    collect_enum = CollectEnum.FAIL
-                    if self.save_failure:
-                        print("Saving failure trajectory.")
-                        obs = self.save_and_reset(collect_enum, {})
-                    else:
-                        print("Failed to assemble the furniture — saving video only, not pickle.")
-                        self.save(collect_enum, {}, save_pickle=False)
-                        self.traj_counter += 1
-                        obs = self.reset()
-                    self.num_fail += 1
-                else:
-                    if done:
-                        collect_enum = CollectEnum.SUCCESS
+            torque_action = torch.zeros_like(sim.dof_pos)
+            sim.isaac_gym.set_dof_actuation_force_tensor(sim.sim, gymtorch.unwrap_tensor(torque_action))
+        sim.refresh()
 
-                    obs = self.save_and_reset(collect_enum, {})
-                    self.num_success += 1
-                print(f"Success: {self.num_success}, Fail: {self.num_fail}")
-                done = False
-                continue
-
-            # Execute action.
-            next_obs, rew, done, info = self.env.step(action)
-
-            if rew == 1:
-                self.last_reward_idx = len(self.acts)
-
-            # Label reward.
-            if collect_enum == CollectEnum.REWARD:
-                rew = self.env.furniture.manual_assemble_label(self.device_interface.rew_key)
-                if rew == 0:
-                    # Correction the label.
-                    self.rews[self.last_reward_idx] = 0
-                    rew = 1
-
-            # Error handling.
-            if not info["obs_success"]:
-                print("Getting observation failed, save trajectory.")
-                # Pop the last reward and action so that obs has length plus 1 then those of actions and rewards.
-                self.rews.pop()
-                self.acts.pop()
-                self.num_fail += 1
-                obs = self.save_and_reset(CollectEnum.FAIL, info)
-                print(f"Success: {self.num_success}, Fail: {self.num_fail}")
-                continue
-
-            # Logging a step.
-            self.step_counter += 1
-            self._verbose_print(
-                f"{[self.step_counter]} assembled: {self.env.furniture.assembled_set} num assembled: {len(self.env.furniture.assembled_set)} Skill: {len(self.skill_set)}"
-            )
-
-            # Store a transition.
-            if info["action_success"]:
-                if self.is_sim:
-                    for k, v in obs.items():
-                        if isinstance(v, dict):
-                            for k1, v1 in v.items():
-                                v[k1] = v1.squeeze().cpu().numpy()
-                        elif k == "color_image1":
-                            obs[k] = resize(obs[k]).squeeze().cpu().numpy()
-                        elif k == "color_image2":
-                            obs[k] = resize_crop(obs[k]).squeeze().cpu().numpy()
-                        else:
-                            obs[k] = v.squeeze().cpu().numpy()
-                    if isinstance(rew, torch.Tensor):
-                        rew = float(rew.squeeze().cpu())
-
-                self.org_obs.append(obs.copy())
-                ob = {}
-                # if (not self.is_sim) or (not self.resize_sim_img):
-                #     # Resize for every real world images, or for sim didn't resize in simulation side.
-                #     ob["color_image1"] = resize(obs["color_image1"])
-                #     ob["color_image2"] = resize_crop(obs["color_image2"])
-                # else:
-                #     ob["color_image1"] = obs["color_image1"]
-                #     ob["color_image2"] = obs["color_image2"]
-                ob["color_image1"] = obs["color_image1"]
-                ob["color_image2"] = obs["color_image2"]
-                ob["robot_state"] = obs["robot_state"]
-                ob["parts_poses"] = obs["parts_poses"]
-                self.obs.append(ob)
-
-                if self.is_sim:
-                    if isinstance(record_action, torch.Tensor):
-                        record_action = record_action.squeeze().cpu().numpy()
-                    else:
-                        record_action = record_action.squeeze()
-                self.acts.append(record_action)
-                self.rews.append(rew)
-                self.skills.append(skill_complete)
-            obs = next_obs
-
-        kind = "total" if self.save_failure else "successful"
-        print(
-            f"Collected {num_saved()} / {self.num_demos} {kind} trajectories (success={self.num_success}, fail={self.num_fail})!"
-        )
-
-    def save_and_reset(self, collect_enum: CollectEnum, info):
-        """Saves the collected data and reset the environment."""
-        self.save(collect_enum, info)
-        self.traj_counter += 1
-        print(f"Saved {self.traj_counter} trajectories in this run.")
-        return self.reset()
-
-    def _configure_episode(self):
-        """Propagate per-episode non-Markovian config to part FSMs."""
+    def _configure_episode(self, env_idx: int = 0):
+        """Propagate per-episode non-Markovian config to part FSMs for env_idx."""
         if not self.non_markovian:
             return
-        for part in self.env.furnitures[0].parts:
+        for part in self.env.furnitures[env_idx].parts:
             if hasattr(part, "apply_non_markovian_config"):
                 part.apply_non_markovian_config()
 
-    def reset(self):
+    # ------------------------------------------------------------------
+    # Main collection loop
+    # ------------------------------------------------------------------
+
+    def collect(self):
+        print("[data collection] Start collecting the data!")
+
+        # Full initial reset of all envs.
         obs = self.env.reset()
-        self._reset_collector_buffer()
-        self._configure_episode()
+        self._reset_all_buffers()
+        for env_idx in range(self.num_envs):
+            self._configure_episode(env_idx)
 
-        print("Start collecting the data!")
-        if not self.scripted:
-            print("Press enter to start")
-            while True:
-                if input() == "":
+        done = torch.zeros(self.num_envs, dtype=torch.bool)
+
+        def num_saved():
+            return self.num_success + (self.num_fail if self.save_failure else 0)
+
+        while num_saved() < self.num_demos:
+            # --- Handle envs that finished in the previous step ---
+            if done.any():
+                for env_idx in range(self.num_envs):
+                    if not done[env_idx]:
+                        continue
+                    if num_saved() >= self.num_demos:
+                        continue
+
+                    # obs[env_idx] is the terminal obs from the previous env.step().
+                    self._store_terminal_obs(env_idx, obs)
+
+                    success = self.env.furnitures[env_idx].all_assembled()
+                    collect_enum = CollectEnum.SUCCESS if success else CollectEnum.FAIL
+
+                    if success:
+                        self.save(env_idx, collect_enum, {})
+                        self.num_success += 1
+                        print(f"[env {env_idx}] SUCCESS — Success: {self.num_success}, Fail: {self.num_fail}")
+                    else:
+                        if self.save_failure:
+                            print(f"[env {env_idx}] Saving failure trajectory.")
+                            self.save(env_idx, collect_enum, {})
+                        else:
+                            print(f"[env {env_idx}] Failed to assemble — saving video only, not pickle.")
+                            self.save(env_idx, collect_enum, {}, save_pickle=False)
+                        self.num_fail += 1
+                        print(f"[env {env_idx}] FAIL   — Success: {self.num_success}, Fail: {self.num_fail}")
+
+                    self.traj_counter += 1
+                    print(f"[env {env_idx}] Saved {self.traj_counter} trajectories in this run.")
+
+                    self._reset_single_env(env_idx)
+                    self._configure_episode(env_idx)
+                    self._reset_env_buffer(env_idx)
+
+                # Refresh physics and get updated obs (including post-reset obs for reset envs).
+                obs = self.env.unwrapped._get_observation()
+                done = torch.zeros(self.num_envs, dtype=torch.bool)
+
+                if num_saved() >= self.num_demos:
                     break
-            time.sleep(0.2)
 
-        return obs
+            # --- Compute actions for all envs ---
+            noisy_action, clean_action, skill_complete = self.env.get_assembly_action()
+            pos_bounds_m = 0.02 if self.env.ctrl_mode == "diffik" else 0.025
+            ori_bounds_deg = 15 if self.env.ctrl_mode == "diffik" else 20
+            action = scale_scripted_action(
+                noisy_action.detach().cpu().clone(),
+                pos_bounds_m=pos_bounds_m,
+                ori_bounds_deg=ori_bounds_deg,
+                device=self.env.device,
+            )
+            record_action = scale_scripted_action(
+                clean_action.detach().cpu().clone(),
+                pos_bounds_m=pos_bounds_m,
+                ori_bounds_deg=ori_bounds_deg,
+                device=self.env.device,
+            )
 
-    def _reset_collector_buffer(self):
-        self.obs = []
-        self.org_obs = []
-        self.acts = []
-        self.rews = []
-        self.skills = []
-        self.step_counter = 0
-        self.last_reward_idx = -1
-        self.skill_set = []
+            # --- Step all envs ---
+            next_obs, rew, done_new, info = self.env.step(action)
 
-    def save(self, collect_enum: CollectEnum, info, save_pickle: bool = True):
-        print(f"Length of trajectory: {len(self.obs)}")
+            # --- Store transitions for all active envs ---
+            if info["action_success"]:
+                for env_idx in range(self.num_envs):
+                    obs_np = self._obs_to_numpy(obs, env_idx)
+                    rew_val = float(rew[env_idx].squeeze().cpu())
+                    skill_val = skill_complete[env_idx] if isinstance(skill_complete, (list, tuple)) else skill_complete
+                    rec_act_i = record_action[env_idx]
+                    self._store_step(env_idx, obs_np, rec_act_i, rew_val, skill_val)
+                    self._verbose_print(f"[env {env_idx}] step={self._bufs[env_idx]['step_counter']}")
 
-        # Save transitions with resized images.
+            obs = next_obs
+            done = done_new.squeeze(-1)
+
+        kind = "total" if self.save_failure else "successful"
+        print(
+            f"Collected {num_saved()} / {self.num_demos} {kind} trajectories"
+            f" (success={self.num_success}, fail={self.num_fail})!"
+        )
+
+    # ------------------------------------------------------------------
+    # Save
+    # ------------------------------------------------------------------
+
+    def save(self, env_idx: int, collect_enum: CollectEnum, info, save_pickle: bool = True):
+        """Save pickle file (and optionally video) of an episode."""
+        buf = self._bufs[env_idx]
+        print(f"[env {env_idx}] Length of trajectory: {len(buf['obs'])}")
+
         data = {}
-        data["observations"] = self.obs
-        data["actions"] = self.acts
-        data["rewards"] = self.rews
-        data["skills"] = self.skills
-        data["success"] = True if collect_enum == CollectEnum.SUCCESS else False
+        data["observations"] = buf["obs"]
+        data["actions"] = buf["acts"]
+        data["rewards"] = buf["rews"]
+        data["skills"] = buf["skills"]
+        data["success"] = collect_enum == CollectEnum.SUCCESS
         data["furniture"] = self.furniture
 
         if "error" in info:
@@ -355,14 +339,15 @@ class DataCollector:
         demo_path = self.data_path / ("success" if data["success"] else "failure")
         demo_path.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        # Use microsecond resolution to avoid filename collisions across parallel envs.
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
         pkl_path = demo_path / f"{timestamp}.pkl"
         if self.compress_pickles:
             pkl_path = pkl_path.with_suffix(".pkl.xz")
 
         if save_pickle:
             pickle_data(data, pkl_path)
-            print(f"Data saved at {pkl_path}")
+            print(f"[env {env_idx}] Data saved at {pkl_path}")
 
         should_record = (
             self.record_video == "all"
@@ -373,7 +358,7 @@ class DataCollector:
             frames = data_to_video(data)
             video_path = (demo_path / timestamp).with_suffix(".mp4")
             create_mp4(frames, video_path)
-            print(f"Video saved at {video_path}")
+            print(f"[env {env_idx}] Video saved at {video_path}")
 
     def __del__(self):
         del self.env

@@ -14,6 +14,7 @@ if __name__ == "__main__":
     parser.add_argument("--randomness", "-r", type=str, default="low")
     parser.add_argument("--num-demos", "-n", type=int, default=100)
     parser.add_argument("--gpu-id", "-g", type=int, default=0)
+    parser.add_argument("--num-envs", "-e", type=int, default=1, help="Number of parallel Isaac Gym environments.")
     # parser.add_argument("--resize-sim-img", action="store_true")
     parser.add_argument("--furniture", "-f", type=str, required=True)
     parser.add_argument("--save-failure", action="store_true")
@@ -76,6 +77,7 @@ if __name__ == "__main__":
         non_markovian=args.non_markovian,
         record_video=args.record_video,
         no_noise=args.no_noise,
+        num_envs=args.num_envs,
     )
 
     collector.collect()

@@ -102,6 +102,18 @@ def main():
         compress_pickles=False,
         resume_trajectory_paths=pickle_paths,
     )
+    
+    print("\n" + "="*50)
+    print("INSTRUCTIONS:")
+    print("Press 'n' to discard the current episode and skip to the next one.")
+    print("Press 't' to manually save and skip to the next episode.")
+    print("The episode will automatically save and skip to the next one upon task success.")
+    print("="*50 + "\n")
+
+    # Automatically save and skip to next episode upon task success
+    if hasattr(data_collector.env, "unwrapped") and hasattr(data_collector.env.unwrapped, "manual_done"):
+        data_collector.env.unwrapped.manual_done = False
+
     data_collector.collect()
 
 

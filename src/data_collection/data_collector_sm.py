@@ -294,7 +294,6 @@ class DataCollectorSpaceMouse:
 
                     # get teleop command
                     sm_state = sm.get_motion_state_transformed()
-                    print("sm_state", sm_state)
                     dpos = sm_state[:3] * (args.max_pos_speed / frequency)
                     drot_xyz = sm_state[3:] * (args.max_rot_speed / frequency)
                     drot = st.Rotation.from_euler("xyz", drot_xyz)
@@ -558,11 +557,12 @@ class DataCollectorSpaceMouse:
 
         # We'll update the steps counter whenever we store an observation
         if not setup_phase:
-            print(
-                f"{[self.step_counter]} assembled: {self.env.furniture.assembled_set} "
-                f"num assembled: {len(self.env.furniture.assembled_set)} "
-                f"Skill: {len(self.skill_set)}."
-            )
+            # print(
+            #     f"{[self.step_counter]} assembled: {self.env.furniture.assembled_set} "
+            #     f"num assembled: {len(self.env.furniture.assembled_set)} "
+            #     f"Skill: {len(self.skill_set)}."
+            # )
+            pass
 
     @property
     def step_counter(self):
@@ -571,7 +571,7 @@ class DataCollectorSpaceMouse:
     def save_and_reset(self, collect_enum: CollectEnum, info):
         """Saves the collected data and reset the environment."""
         self.save(collect_enum, info)
-        self.verbose_print(f"Saved {self.traj_counter} trajectories in this run.")
+        self.verbose_print(f"Saved {self.traj_counter + 1} trajectories in this run.")
         return self.reset()
 
     def reset(self):

@@ -431,8 +431,16 @@ class DataCollectorSpaceMouse:
                         ready_to_grasp = True
                         target_pose_last_action_rv = None
 
-                        gripper_open = gripper_width >= 0.95
-                        grasp_flag = torch.from_numpy(np.array([-1 if gripper_open else 1])).to(self.env.device)
+                        (
+                            target_pose_rv,
+                            gripper_width,
+                            gripper_open,
+                            grasp_flag,
+                        ) = self.set_target_pose()
+                        
+                        if hasattr(self.device_interface, "reset"):
+                            self.device_interface.reset()
+                        prev_keyboard_gripper = -1
 
                         continue
 

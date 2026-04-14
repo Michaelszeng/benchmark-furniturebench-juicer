@@ -500,9 +500,9 @@ class DataCollectorSpaceMouse:
                         self.robot_settled = True
                         print("Robot settled")
 
-                    if self.show_wrist_cam and "color_image2" in obs:
+                    if self.show_wrist_cam and "color_image1" in obs:
                         import cv2
-                        img = obs["color_image2"]
+                        img = obs["color_image1"]
                         if isinstance(img, torch.Tensor):
                             img = img.cpu().numpy().squeeze()
                         elif isinstance(img, np.ndarray):
@@ -510,6 +510,8 @@ class DataCollectorSpaceMouse:
                         
                         if img.shape[-1] == 3:
                             img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                            # Resize to 2x
+                            img_bgr = cv2.resize(img_bgr, (img_bgr.shape[1] * 2, img_bgr.shape[0] * 2))
                             cv2.imshow("Wrist Camera", img_bgr)
                             cv2.waitKey(1)
 

@@ -43,9 +43,10 @@ def main():
         default="osc",
     )
     parser.add_argument(
-        "--draw-marker",
-        action="store_true",
-        help="If set, will draw an AprilTag marker on the furniture",
+        "--no-draw-marker",
+        action="store_false",
+        help="If set, will not draw an AprilTag marker on the furniture",
+        dest="draw_marker",
     )
     parser.add_argument(
         "--no-ee-laser",

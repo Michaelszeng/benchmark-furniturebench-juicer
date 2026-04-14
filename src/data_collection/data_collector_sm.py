@@ -187,7 +187,7 @@ class DataCollectorSpaceMouse:
 
         if self.show_wrist_cam:
             import cv2
-            cv2.namedWindow("Wrist Camera", cv2.WINDOW_NORMAL)
+            cv2.namedWindow("Wrist Camera", cv2.WINDOW_AUTOSIZE)
 
     def _squeeze_and_numpy(self, d: Dict[str, Union[torch.Tensor, np.ndarray, float, int, None]]):
         """

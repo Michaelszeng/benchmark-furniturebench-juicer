@@ -60,9 +60,10 @@ def main():
         default=None,
     )
     parser.add_argument(
-        "--show-wrist-cam",
-        action="store_true",
-        help="If set, will open a window showing the wrist camera view",
+        "--no-show-wrist-cam",
+        action="store_false",
+        help="If set, will not open a window showing the wrist camera view",
+        dest="show_wrist_cam",
     )
 
     args = parser.parse_args()

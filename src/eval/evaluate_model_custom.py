@@ -361,7 +361,7 @@ if __name__ == "__main__":
         "--record-failures",
         action="store_true",
         default=False,
-        help="If set, only save videos of failed trials, and save all of them (overrides --n-video-trials).",
+        help="If set, also save videos of all failed trials beyond --n-video-trials.",
     )
     parser.add_argument(
         "--n-action-steps",
@@ -541,10 +541,7 @@ if __name__ == "__main__":
     for i in range(i_start, n_rounds):
         t_start = time.time()
         video_budget = args.n_video_trials if args.n_video_trials >= 0 else args.n_rollouts
-        if args.record_failures:
-            record_this_round = args.save_video
-        else:
-            record_this_round = args.save_video and (n_total < video_budget)
+        record_this_round = args.save_video and (n_total < video_budget or args.record_failures)
         # If using dataset initial states, cycle through them round by round.
         round_init_states = None
         if dataset_init_states is not None:
@@ -587,10 +584,9 @@ if __name__ == "__main__":
 
             if record_this_round:
                 save_this_video = False
-                if args.record_failures:
-                    if result_str != "success":
-                        save_this_video = True
-                elif trial_num <= video_budget:
+                if trial_num <= video_budget:
+                    save_this_video = True
+                elif args.record_failures and result_str != "success":
                     save_this_video = True
                 
                 if save_this_video:

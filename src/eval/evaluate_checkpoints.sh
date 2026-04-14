@@ -83,6 +83,7 @@ for CHECKPOINT in "${CHECKPOINTS[@]}"; do
         --n-envs "${N_ENVS}" \
         --n-action-steps "${N_ACTION_STEPS}" \
         --n-video-trials "${N_VIDEO_TRIALS}" \
+        --record-failures \
         --output-dir "${OUT_DIR}" \
         ${RESUME_FLAG} \
         ${HEADLESS_FLAG}; then

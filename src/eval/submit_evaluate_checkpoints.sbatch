@@ -24,17 +24,15 @@ DATE=$(date +"%Y-%m-%d")
 TIME=$(date +"%H-%M-%S")
 echo "DATE: $DATE"
 echo "TIME: $TIME"
+echo "ACTION_HORIZON: $ACTION_HORIZON"
 
 # ============================================================================
 # Evaluation parameters
 # ============================================================================
 # path to a .ckpt file or a directory of .ckpt files
-CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted/checkpoints"
-# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_v2_dataset/checkpoints"
-# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_no_pressure/checkpoints"
-# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_screw_z_pressure/checkpoints"
-
+CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_teleop/checkpoints"
+
 FURNITURE="one_leg"
 N_ENVS=64
 N_ROLLOUTS=500

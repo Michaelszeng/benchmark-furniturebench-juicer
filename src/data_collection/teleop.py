@@ -59,6 +59,11 @@ def main():
         help="Directory to resume trajectories from",
         default=None,
     )
+    parser.add_argument(
+        "--show-wrist-cam",
+        action="store_true",
+        help="If set, will open a window showing the wrist camera view",
+    )
 
     args = parser.parse_args()
 
@@ -101,6 +106,7 @@ def main():
         ee_laser=args.ee_laser,
         compress_pickles=False,
         resume_trajectory_paths=pickle_paths,
+        show_wrist_cam=args.show_wrist_cam,
     )
     
     print("\n" + "="*50)

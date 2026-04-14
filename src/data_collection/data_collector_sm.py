@@ -86,6 +86,7 @@ class DataCollectorSpaceMouse:
         right_multiply_rot: bool = True,
         compress_pickles: bool = False,
         resume_trajectory_paths: Union[List[str], None] = None,
+        show_wrist_cam: bool = False,
     ):
         """
         Args:
@@ -160,6 +161,7 @@ class DataCollectorSpaceMouse:
         self.resize_sim_img = resize_sim_img
         self.compress_pickles = compress_pickles
         self.resume_trajectory_paths = resume_trajectory_paths
+        self.show_wrist_cam = show_wrist_cam
 
         self.iter_idx = 0
 
@@ -182,6 +184,10 @@ class DataCollectorSpaceMouse:
         self.right_multiply_rot = right_multiply_rot
 
         self._reset_collector_buffer()
+
+        if self.show_wrist_cam:
+            import cv2
+            cv2.namedWindow("Wrist Camera", cv2.WINDOW_NORMAL)
 
     def _squeeze_and_numpy(self, d: Dict[str, Union[torch.Tensor, np.ndarray, float, int, None]]):
         """
@@ -493,6 +499,19 @@ class DataCollectorSpaceMouse:
                     if (not self.robot_settled) and ((datetime.now() - self.starttime).seconds > self.start_delay):
                         self.robot_settled = True
                         print("Robot settled")
+
+                    if self.show_wrist_cam and "color_image2" in obs:
+                        import cv2
+                        img = obs["color_image2"]
+                        if isinstance(img, torch.Tensor):
+                            img = img.cpu().numpy().squeeze()
+                        elif isinstance(img, np.ndarray):
+                            img = img.squeeze()
+                        
+                        if img.shape[-1] == 3:
+                            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                            cv2.imshow("Wrist Camera", img_bgr)
+                            cv2.waitKey(1)
 
                 self.verbose_print(f"Collected {self.traj_counter} / {self.num_demos} successful trajectories!")
 

@@ -187,6 +187,7 @@ class DataCollectorSpaceMouse:
 
         if self.show_wrist_cam:
             import cv2
+
             cv2.namedWindow("Wrist Camera", cv2.WINDOW_AUTOSIZE)
 
     def _squeeze_and_numpy(self, d: Dict[str, Union[torch.Tensor, np.ndarray, float, int, None]]):
@@ -443,7 +444,7 @@ class DataCollectorSpaceMouse:
                             gripper_open,
                             grasp_flag,
                         ) = self.set_target_pose()
-                        
+
                         if hasattr(self.device_interface, "reset"):
                             self.device_interface.reset()
                         prev_keyboard_gripper = -1
@@ -502,16 +503,17 @@ class DataCollectorSpaceMouse:
 
                     if self.show_wrist_cam and "color_image1" in obs:
                         import cv2
+
                         img = obs["color_image1"]
                         if isinstance(img, torch.Tensor):
                             img = img.cpu().numpy().squeeze()
                         elif isinstance(img, np.ndarray):
                             img = img.squeeze()
-                        
+
                         if img.shape[-1] == 3:
                             img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                            # Resize to 2x
-                            img_bgr = cv2.resize(img_bgr, (img_bgr.shape[1] * 2, img_bgr.shape[0] * 2))
+                            # Resize to 1/2x
+                            img_bgr = cv2.resize(img_bgr, (img_bgr.shape[1] // 2, img_bgr.shape[0] // 2))
                             cv2.imshow("Wrist Camera", img_bgr)
                             cv2.waitKey(1)
 

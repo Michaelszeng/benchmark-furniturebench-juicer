@@ -14,6 +14,7 @@ artifacts/
 training-artifacts/
 logs/
 .isaacgym/
+dataset/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

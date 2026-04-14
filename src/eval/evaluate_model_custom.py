@@ -1,5 +1,8 @@
 """Evaluate a diffusion_policy checkpoint on FurnitureBench simulation.
 
+Uses FurnitureSimFull-v0, which mirrors the data-collection environment:
+full observations (cameras + all state keys), dict robot_state, act_rot_repr=rot_6d.
+
 Usage:
     python src/eval/evaluate_model_custom.py \
         --checkpoint /path/to/checkpoint.ckpt \
@@ -25,11 +28,10 @@ import gym
 import imageio
 import numpy as np
 import torch
-from furniture_bench.envs.observation import DEFAULT_STATE_OBS, DEFAULT_VISUAL_OBS
 from furniture_bench.sim_config import sim_config
 from omegaconf import OmegaConf
 
-from src.common.geometry import np_action_6d_to_quat, proprioceptive_quat_to_6d_rotation
+from src.common.geometry import proprioceptive_quat_to_6d_rotation
 from src.common.tasks import task_timeout
 from src.data_processing.utils import resize, resize_crop
 from src.visualization.render_mp4 import unpickle_data
@@ -37,13 +39,13 @@ from src.visualization.render_mp4 import unpickle_data
 # Register the "eval" resolver used in diffusion_policy configs.
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
+# Keys used to reconstruct the 14-D proprioceptive vector from the full
+# robot_state dict that FurnitureSimFull-v0 returns.  Order must match
+# filter_and_concat_robot_state / ROBOT_STATES in furniture_bench.
+_ROBOT_STATE_KEYS = ["ee_pos", "ee_quat", "ee_pos_vel", "ee_ori_vel", "gripper_width"]
 
-# def preprocess_images(imgs: torch.Tensor) -> torch.Tensor:
-#     """Convert (B, H, W, 3) uint8 → (B, 3, 224, 224) float [0, 1]."""
-#     imgs = imgs.float() / 255.0
-#     imgs = imgs.permute(0, 3, 1, 2)  # (B, H, W, 3) -> (B, 3, H, W)
-#     imgs = TF.resize(imgs, [224, 224], interpolation=InterpolationMode.BILINEAR, antialias=True)
-#     return imgs
+# Per-dimension label for one part's 7-D pose block [x y z qx qy qz qw].
+_POSE_DIM_NAMES = ["x", "y", "z", "qx", "qy", "qz", "qw"]
 
 
 def preprocess_obs(obs: dict, device: torch.device, obs_keys: set) -> dict:
@@ -51,13 +53,20 @@ def preprocess_obs(obs: dict, device: torch.device, obs_keys: set) -> dict:
     Handles both image-based policies (color_image1, color_image2, robot_state)
     and state-based policies (robot_state, parts_poses).
 
+    FurnitureSimFull-v0 returns robot_state as a dict; this function selects
+    and concatenates the canonical 5 keys to form a 14-D quat vector, then
+    converts to 16-D rot-6d.
+
     Args:
         obs: raw observation dict from env.step / env.reset.
         device: torch device to move tensors to.
         obs_keys: set of observation key names the policy expects
                   (from cfg.shape_meta.obs).
     """
-    result = {"robot_state": proprioceptive_quat_to_6d_rotation(obs["robot_state"].float().to(device))}
+    rs = obs["robot_state"]
+    if isinstance(rs, dict):
+        rs = torch.cat([rs[k] for k in _ROBOT_STATE_KEYS], dim=-1)
+    result = {"robot_state": proprioceptive_quat_to_6d_rotation(rs.float().to(device))}
     if "color_image1" in obs_keys:
         # resize() matches data_collector.py: 1280x720 → 320x240, same FOV.
         result["color_image1"] = resize(obs["color_image1"]).float().to(device)
@@ -96,21 +105,6 @@ def load_policy(checkpoint_path: str, device: torch.device):
     payload = torch.load(open(checkpoint_path, "rb"), pickle_module=dill)
     cfg = payload["cfg"]
 
-    # # TEMPORARY FIX
-    # # Checkpoints saved with DataParallel have every key prefixed with "module.".
-    # # Strip it so the state dict aligns with a plain (non-wrapped) model.
-    # # Also drop training-only submodule keys (e.g. mask_generator) that are not
-    # # part of the inference-time policy architecture.
-    # _INFERENCE_ONLY_DROP_PREFIXES = ("mask_generator.",)
-    # if "state_dicts" in payload:
-    #     for sd_key, sd in payload["state_dicts"].items():
-    #         if any(k.startswith("module.") for k in sd):
-    #             sd = {(k[len("module.") :] if k.startswith("module.") else k): v for k, v in sd.items()}
-    #         payload["state_dicts"][sd_key] = {
-    #             k: v for k, v in sd.items() if not any(k.startswith(pfx) for pfx in _INFERENCE_ONLY_DROP_PREFIXES)
-    #         }
-    # # END TEMPORARY FIX
-
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)
     # Exclude optimizer/scheduler state: not needed for inference, and optimizer
@@ -141,6 +135,93 @@ def load_policy(checkpoint_path: str, device: torch.device):
     if hasattr(policy, "obs_encoder"):
         policy.obs_encoder.eval()
     return policy, cfg
+
+
+def load_reference_pkl_parts_poses(pkl_path: str) -> np.ndarray:
+    """Load parts_poses from all timesteps of a reference pkl file.
+
+    Returns array of shape (T, 35).
+    """
+    data = unpickle_data(Path(pkl_path))
+    obs = data["observations"]
+    parts_poses = np.array([o["parts_poses"] for o in obs], dtype=np.float32)
+    # parts_poses may be stored with shape (35,) or (1, 35) per timestep; flatten
+    if parts_poses.ndim == 3:
+        parts_poses = parts_poses.squeeze(1)
+    return parts_poses  # (T, 35)
+
+
+def _plot_parts_poses_traces(
+    rollout_traces: list,
+    reference_traces,
+) -> None:
+    """Display a live parts-poses trace plot.
+
+    Args:
+        rollout_traces: list of (T_i, 35) np.ndarray, one per rollout round.
+                        Each row is one timestep's flattened parts_poses.
+        reference_traces: (T_ref, 35) np.ndarray, or None.
+                          Full-episode parts_poses from the reference pkl.
+    """
+    import matplotlib.pyplot as plt
+
+    n_parts = 5
+    # 10 distinguishable colours, one per pose dimension (7 used).
+    colors = [
+        "#e6194b", "#3cb44b", "#4363d8", "#f58231",
+        "#911eb4", "#42d4f4", "#f032e6",
+    ]
+
+    fig, axes = plt.subplots(n_parts, 1, figsize=(14, 4 * n_parts), squeeze=False)
+    axes = axes[:, 0]  # (n_parts,)
+
+    for part_idx in range(n_parts):
+        ax = axes[part_idx]
+        base = part_idx * 7
+
+        # --- rollout traces (solid, slightly transparent when multiple rounds) ---
+        alpha = max(0.35, 1.0 - 0.15 * len(rollout_traces))
+        for round_idx, trace in enumerate(rollout_traces):
+            for dim_idx, dim_name in enumerate(_POSE_DIM_NAMES):
+                ax.plot(
+                    trace[:, base + dim_idx],
+                    color=colors[dim_idx],
+                    alpha=alpha,
+                    linewidth=1.4,
+                    label=f"rollout {dim_name}" if round_idx == 0 else None,
+                )
+
+        # --- reference pkl traces (dashed, full opacity) ---
+        if reference_traces is not None:
+            for dim_idx, dim_name in enumerate(_POSE_DIM_NAMES):
+                ax.plot(
+                    reference_traces[:, base + dim_idx],
+                    color=colors[dim_idx],
+                    alpha=1.0,
+                    linewidth=2.0,
+                    linestyle="--",
+                    label=f"pkl {dim_name}",
+                )
+
+        ax.set_title(f"Part {part_idx} poses over time", fontsize=11)
+        ax.set_xlabel("Step")
+        ax.set_ylabel("Value")
+        ax.legend(
+            loc="upper right",
+            fontsize=7,
+            ncol=2,
+            framealpha=0.7,
+        )
+        ax.grid(True, alpha=0.25)
+
+    fig.suptitle(
+        f"Parts poses: {len(rollout_traces)} rollout(s)"
+        + (" vs reference pkl" if reference_traces is not None else ""),
+        fontsize=13,
+        y=1.002,
+    )
+    plt.tight_layout()
+    plt.show()
 
 
 def _write_mp4(frames: list, path: Path, fps: int = 10) -> None:
@@ -178,93 +259,6 @@ def _repair_csv_and_summary_from_pkl_data(pkl_path: Path):
     return csv_file, csv.DictWriter(csv_file, fieldnames=fields)
 
 
-def load_dataset_init_states(dataset_path: str):
-    """Load the first observation from pkl file(s) at dataset_path.
-
-    dataset_path may be a single .pkl/.pkl.xz file or a directory containing
-    such files.  Returns a list of raw obs dicts (robot_state dict +
-    parts_poses array), matching the format expected by env.reset_to().
-    """
-    p = Path(dataset_path)
-    if p.is_file():
-        pkl_paths = [p]
-    else:
-        pkl_paths = sorted(p.glob("*.pkl*"))
-    if not pkl_paths:
-        raise FileNotFoundError(f"No pkl files found at {dataset_path}")
-    states = []
-    for pkl_path in pkl_paths:
-        data = unpickle_data(pkl_path)
-        states.append(data["observations"][0])
-        break
-    print(f"Loaded {len(states)} initial states from {dataset_path}")
-    return states
-
-
-def reset_to_dataset_states(env, states):
-    """Reset all envs to the given dataset states and return observations.
-
-    Replicates the refresh + zero-torque sequence that env.reset() performs,
-    which reset_to() itself skips.
-    """
-    from isaacgym import gymtorch
-
-    # Call env.reset() first so the gym.Wrapper bookkeeping is satisfied
-    # (it raises "Cannot call step() before reset()" otherwise), then
-    # immediately override the random initial state with our dataset states.
-    env.reset()
-
-    # env is a gym.Wrapper; the actual FurnitureSimEnv sits at env.unwrapped.
-    sim = env.unwrapped
-
-    # reset_env_to expects gripper_width (and similar fields) to be plain scalars,
-    # but pkl robot_state dicts may store them as 1-D arrays.  Squeeze them here.
-    def _squeeze_robot_state(state):
-        if not isinstance(state.get("robot_state"), dict):
-            return state
-        rs = {
-            k: (float(np.squeeze(v)) if isinstance(v, np.ndarray) and v.ndim == 1 and v.size == 1 else v)
-            for k, v in state["robot_state"].items()
-        }
-        return {**state, "robot_state": rs}
-
-    states = [_squeeze_robot_state(s) for s in states]
-    sim.reset_to(states)  # sets dof state + root state for each env
-
-    # Mimic env.reset(): apply zero torques then refresh so Isaac Gym registers
-    # the new state before we read back observations.
-    if sim.ctrl_mode == "osc":
-        torque_action = torch.zeros_like(sim.dof_pos)
-        sim.isaac_gym.set_dof_actuation_force_tensor(sim.sim, gymtorch.unwrap_tensor(torque_action))
-    sim.refresh()
-    sim.furniture.reset()
-    sim.scripted_timeout[:] = [False] * len(sim.scripted_timeout)
-    sim.refresh()
-    return sim._get_observation()
-
-
-def _print_rollout_step(step: int, raw_obs: dict, action: torch.Tensor) -> None:
-    """Print one rollout step in the same format as pkl files (env 0 only).
-
-    robot_state: 14-D  [ee_pos(3) | ee_quat(4) | ee_pos_vel(3) | ee_ori_vel(3) | gripper(1)]
-    parts_poses: 5 × 7-D  [x y z qx qy qz qw] each, in AprilTag frame
-    action:       8-D  [dx dy dz | qx qy qz qw | gripper]  (converted from policy's rot-6d)
-    """
-    rs = raw_obs["robot_state"][0].cpu().numpy()  # (14,)
-    pp = raw_obs["parts_poses"][0].cpu().numpy()  # (35,)
-    act_6d = action[0:1].cpu().numpy()  # (1, 10)
-    act_q = np_action_6d_to_quat(act_6d)[0]  # (8,)
-
-    def _fmt(arr, decimals=4):
-        return "[" + ", ".join(f"{v:.{decimals}f}" for v in arr) + "]"
-
-    print(f"\n--- t={step} ---")
-    print(f"  robot_state : {_fmt(rs)}")
-    for i in range(5):
-        print(f"  part_{i}_pose : {_fmt(pp[i * 7 : (i + 1) * 7])}")
-    print(f"  action      : {_fmt(act_q)}")
-
-
 @torch.no_grad()
 def run_rollout(
     env,
@@ -275,75 +269,80 @@ def run_rollout(
     obs_keys: set,
     record_video: bool = False,
     n_action_steps: int = None,
-    init_states: list = None,
-    verbose: bool = False,
 ) -> dict:
     """Run one round of parallel rollouts.
 
     Returns a dict with per-env arrays:
-        success      (n_envs,) bool
-        total_reward (n_envs,) float
-        result       (n_envs,) str — "success", "timeout", or "failure"
-        steps        int — total steps executed this round
-        frames       (n_envs,) list[np.ndarray] — only present if record_video=True;
-                     each element is a list of (H, W*2, 3) uint8 frames (cam1 | cam2)
+        success           (n_envs,) bool
+        total_reward      (n_envs,) float
+        result            (n_envs,) str — "success", "timeout", or "failure"
+        steps             int — total steps executed this round
+        steps_per_env     (n_envs,) int
+        parts_poses_trace (T+1, 35) float32 — env-0 parts_poses at every timestep
+                          (initial obs + one entry per env.step call); may be
+                          shorter than rollout_max_steps if interrupted mid-rollout
+        interrupted       bool — True if a KeyboardInterrupt cut the rollout short
+        frames            (n_envs,) list[np.ndarray] — only present if record_video=True;
+                          each element is a list of (H, W*2, 3) uint8 frames (cam1 | cam2)
     """
     n_envs = env.num_envs
-    if init_states is not None:
-        obs = reset_to_dataset_states(env, init_states)
-    else:
-        obs = env.reset()
-    preprocessed = preprocess_obs(obs, device, obs_keys)
-    obs_deque = collections.deque([preprocessed] * n_obs_steps, maxlen=n_obs_steps)
-    action_queue: collections.deque = collections.deque()
+
+    # Initialise accumulators before env.reset() so a Ctrl+C during reset still
+    # produces a valid (possibly empty) return value.
+    parts_poses_trace: list = []
+    interrupted = False
 
     done = torch.zeros((n_envs, 1), dtype=torch.bool, device=device)
     total_reward = torch.zeros(n_envs, device=device)
-    # Track the step at which each env first became done (-1 = never done).
     done_step = torch.full((n_envs,), -1, dtype=torch.long, device=device)
     step = 0
-
-    # Per-env frame buffers: list of lists of (H, W*2, 3) uint8 numpy arrays.
     if record_video:
         frame_buffers = [[] for _ in range(n_envs)]
 
-    while not done.all() and step < rollout_max_steps:
-        if len(action_queue) == 0:
-            obs_dict = build_obs_dict(obs_deque, device)
-            result = policy.predict_action(obs_dict, use_DDIM=True)
-            start = n_obs_steps - 1
-            actions = result["action_pred"][:, start:]
-            n_steps = n_action_steps if n_action_steps is not None else policy.n_action_steps
-            for t in range(n_steps):
-                action_queue.append(actions[:, t, :])
-
-        action = action_queue.popleft()
-        if verbose:
-            _print_rollout_step(step, obs, action)
-        obs, reward, done, _ = env.step(action)
-        total_reward += reward.squeeze(-1).float()
-
-        # Record when each env finishes for the first time.
-        newly_done = done.squeeze(-1) & (done_step == -1)
-        done_step[newly_done] = step
+    try:
+        obs = env.reset()
+        parts_poses_trace.append(obs["parts_poses"][0].cpu().numpy())  # initial obs
 
         preprocessed = preprocess_obs(obs, device, obs_keys)
+        obs_deque = collections.deque([preprocessed] * n_obs_steps, maxlen=n_obs_steps)
+        action_queue: collections.deque = collections.deque()
 
-        if record_video:
-            if "color_image1" in preprocessed:
-                # use the resized/cropped images from preprocessed
-                imgs1 = preprocessed["color_image1"].cpu().numpy().astype(np.uint8)
-                imgs2 = preprocessed["color_image2"].cpu().numpy().astype(np.uint8)
-            else:
-                # policy didn't request images, so they aren't in preprocessed; resize them here
-                imgs1 = resize(obs["color_image1"]).cpu().numpy().astype(np.uint8)
-                imgs2 = resize_crop(obs["color_image2"]).cpu().numpy().astype(np.uint8)
-            for env_idx in range(n_envs):
-                side_by_side = np.concatenate([imgs1[env_idx], imgs2[env_idx]], axis=1)
-                frame_buffers[env_idx].append(side_by_side)
+        while not done.all() and step < rollout_max_steps:
+            if len(action_queue) == 0:
+                obs_dict = build_obs_dict(obs_deque, device)
+                result = policy.predict_action(obs_dict, use_DDIM=True)
+                start = n_obs_steps - 1
+                actions = result["action_pred"][:, start:]
+                n_steps = n_action_steps if n_action_steps is not None else policy.n_action_steps
+                for t in range(n_steps):
+                    action_queue.append(actions[:, t, :])
 
-        obs_deque.append(preprocessed)
-        step += 1
+            action = action_queue.popleft()
+            obs, reward, done, _ = env.step(action)
+            total_reward += reward.squeeze(-1).float()
+
+            newly_done = done.squeeze(-1) & (done_step == -1)
+            done_step[newly_done] = step
+
+            preprocessed = preprocess_obs(obs, device, obs_keys)
+
+            if record_video:
+                if "color_image1" in preprocessed:
+                    imgs1 = preprocessed["color_image1"].cpu().numpy().astype(np.uint8)
+                    imgs2 = preprocessed["color_image2"].cpu().numpy().astype(np.uint8)
+                else:
+                    imgs1 = resize(obs["color_image1"]).cpu().numpy().astype(np.uint8)
+                    imgs2 = resize_crop(obs["color_image2"]).cpu().numpy().astype(np.uint8)
+                for env_idx in range(n_envs):
+                    side_by_side = np.concatenate([imgs1[env_idx], imgs2[env_idx]], axis=1)
+                    frame_buffers[env_idx].append(side_by_side)
+
+            parts_poses_trace.append(obs["parts_poses"][0].cpu().numpy())
+            obs_deque.append(preprocessed)
+            step += 1
+
+    except KeyboardInterrupt:
+        interrupted = True
 
     n_parts = len(env.furniture.should_be_assembled)
     success_mask = (total_reward >= n_parts).cpu().numpy()
@@ -354,13 +353,10 @@ def run_rollout(
         if success_mask[env_idx]:
             results.append("success")
         elif done_step_np[env_idx] == -1:
-            # Never went done — ran out of steps.
             results.append("timeout")
         else:
             results.append("failure")
 
-    # Per-env step count: how many steps each individual trial ran.
-    # done_step == -1 means the env never signalled done (timeout), so it ran for all steps.
     steps_per_env = np.where(done_step_np >= 0, done_step_np + 1, step)
 
     out = {
@@ -369,6 +365,8 @@ def run_rollout(
         "result": results,
         "steps": step,
         "steps_per_env": steps_per_env,
+        "parts_poses_trace": np.stack(parts_poses_trace) if parts_poses_trace else np.empty((0, 35), dtype=np.float32),
+        "interrupted": interrupted,
     }
     if record_video:
         out["frames"] = frame_buffers
@@ -403,7 +401,7 @@ if __name__ == "__main__":
         "--record-failures",
         action="store_true",
         default=False,
-        help="If set, also save videos of all failed trials beyond --n-video-trials.",
+        help="If set, only save videos of failed trials, and save all of them (overrides --n-video-trials).",
     )
     parser.add_argument(
         "--n-action-steps",
@@ -421,21 +419,22 @@ if __name__ == "__main__":
         help="Resume from an existing results.pkl in --output-dir (requires --output-dir)",
     )
     parser.add_argument(
-        "--dataset-dir",
+        "--reference-pkl",
         type=str,
         default=None,
-        help="(Testing) Path to a single .pkl/.pkl.xz file or a directory of such "
-        "files; resets each rollout to their initial observations instead of random "
-        "env.reset().",
+        help="Path to a reference pkl file whose parts_poses are overlaid on the trace plot.",
     )
     args = parser.parse_args()
 
     if args.resume and args.output_dir is None:
         parser.error("--resume requires --output-dir to be specified")
 
-    dataset_init_states = None
-    if args.dataset_dir is not None:
-        dataset_init_states = load_dataset_init_states(args.dataset_dir)
+    # Load reference pkl parts_poses if provided.
+    reference_parts_poses = None
+    if args.reference_pkl is not None:
+        print(f"Loading reference pkl parts_poses from {args.reference_pkl}")
+        reference_parts_poses = load_reference_pkl_parts_poses(args.reference_pkl)
+        print(f"  Reference trajectory length: {len(reference_parts_poses)} steps")
 
     device = torch.device(args.device)
 
@@ -447,33 +446,27 @@ if __name__ == "__main__":
         f"n_obs_steps={n_obs_steps}, n_action_steps={'from_cfg' if n_action_steps is None else n_action_steps}, furniture={args.furniture}, n_envs={args.n_envs}"
     )
 
-    # Detect policy modality from shape_meta and configure env obs accordingly.
+    # Detect policy modality from shape_meta.
     policy_obs_keys = set(cfg.shape_meta.obs.keys())
     is_image_based = "color_image1" in policy_obs_keys
-    env_obs_keys = DEFAULT_VISUAL_OBS if is_image_based else DEFAULT_STATE_OBS
     print(f"Policy type: {'image-based' if is_image_based else 'state-based'} (obs keys: {sorted(policy_obs_keys)})")
-
-    if args.save_video and not is_image_based:
-        # Add camera keys to env obs keys if saving videos (these are not automatically added for state-based policies)
-        env_obs_keys = list(set(env_obs_keys) | {"color_image1", "color_image2"})
 
     # Use the same timeout that scripted data collection uses (sim_config["scripted_timeout"]),
     # falling back to task_timeout for tasks not listed there.
     rollout_max_steps = sim_config["scripted_timeout"].get(args.furniture, task_timeout(args.furniture))
     print(f"Creating env (furniture={args.furniture}, max_steps={rollout_max_steps})")
     np.random.seed(42)
-    # Image-based policies were trained on 1280x720 images captured with the wide
-    # FOV (69.4°), then manually resized/cropped to 320x240 (see data_collector.py).
-    # Setting resize_img=False replicates that setup: the env returns full-res images
-    # and preprocess_obs applies the same resize/resize_crop.  State-based policies
-    # don't render cameras at all, so resize_img has no effect for them.
+    # FurnitureSimFull-v0 mirrors the data-collection environment:
+    # - obs_keys=FULL_OBS (cameras + all state keys), robot_state returned as dict
+    # - act_rot_repr="rot_6d" so env.step accepts the policy's 10-D actions directly
+    # - resize_img=False: env returns full-res 1280x720 images; preprocess_obs applies
+    #   the same resize/resize_crop as data_collector.py.
     env = gym.make(
-        "FurnitureSim-v0",
+        "FurnitureSimFull-v0",
         furniture=args.furniture,
         max_env_steps=rollout_max_steps,
         headless=args.headless,
         num_envs=args.n_envs,
-        obs_keys=env_obs_keys,
         resize_img=False,
         np_step_out=False,
         channel_first=False,
@@ -481,66 +474,7 @@ if __name__ == "__main__":
         action_type="delta",
         ctrl_mode="osc",
         randomness=args.randomness,
-        concat_robot_state=True,
     )
-
-    # --- obs diagnostic (only when --dataset-dir is set) ---
-    if dataset_init_states is not None and not is_image_based:
-        print("\n=== OBS DIAGNOSTIC ===")
-
-        # Print normalizer ranges for obs keys
-        for _k in sorted(policy_obs_keys):
-            _p = policy.normalizer[_k].params_dict
-            _min = _p.input_stats.min.tolist()
-            _max = _p.input_stats.max.tolist()
-            print(f"  normalizer[{_k}]: input_min=")
-            for i in range(0, len(_min), 7):
-                print(f"                    {_min[i : i + 7]}")
-            print("                    input_max=")
-            for i in range(0, len(_max), 7):
-                print(f"                    {_max[i : i + 7]}")
-
-        # Get first obs from env after reset_to_dataset_states
-        _env_obs = reset_to_dataset_states(env, dataset_init_states[: args.n_envs])
-        _env_rs = proprioceptive_quat_to_6d_rotation(_env_obs["robot_state"].float().to(device))[0]  # (16,)
-        _env_pp = _env_obs["parts_poses"].float().to(device)[0]  # (35,)
-        print(f"\n  env robot_state[:8]:  {_env_rs[:8].tolist()}")
-        print(f"  env robot_state[8:]:  {_env_rs[8:].tolist()}")
-        print(f"  env parts_poses[:7]:  {_env_pp[:7].tolist()}")
-        print(f"  env parts_poses[7:14]:{_env_pp[7:14].tolist()}")
-
-        # Load the matching raw pkl t=0 obs to compare robot_state and parts_poses
-        _pkl_state = dataset_init_states[0]
-        from furniture_bench.robot.robot_state import filter_and_concat_robot_state as _frc
-
-        from src.common.geometry import np_proprioceptive_quat_to_6d_rotation as _np6d
-
-        if isinstance(_pkl_state["robot_state"], dict):
-            _pkl_rs_quat = _frc(_pkl_state["robot_state"])  # (14,)
-        else:
-            _pkl_rs_quat = np.array(_pkl_state["robot_state"], dtype=np.float32)
-        _pkl_rs_6d = torch.tensor(_np6d(_pkl_rs_quat[None]))[0]  # (16,)
-        _pkl_pp = torch.tensor(np.array(_pkl_state["parts_poses"], dtype=np.float32))  # (35,)
-        print(f"\n  pkl robot_state[:8]:  {_pkl_rs_6d[:8].tolist()}")
-        print(f"  pkl parts_poses[:7]:  {_pkl_pp[:7].tolist()}")
-
-        _rs_diff = (_env_rs.cpu() - _pkl_rs_6d).abs().max().item()
-        _pp_diff = (_env_pp.cpu() - _pkl_pp).abs().max().item()
-        print(f"\n  max abs diff robot_state (env vs pkl t=0): {_rs_diff:.6f}")
-        print(f"  max abs diff parts_poses (env vs pkl t=0): {_pp_diff:.6f}")
-
-        # Run policy on env obs and print first predicted action
-        _obs_deque = collections.deque(
-            [{"robot_state": _env_rs.unsqueeze(0), "parts_poses": _env_pp.unsqueeze(0)}] * n_obs_steps,
-            maxlen=n_obs_steps,
-        )
-        with torch.no_grad():
-            _pred = policy.predict_action(build_obs_dict(_obs_deque, device), use_DDIM=True)
-        _a0 = _pred["action_pred"][0, n_obs_steps - 1, :]  # first action after obs window
-        print(f"\n  predicted action (pos delta):  {_a0[:3].tolist()}")
-        print(f"  predicted action (rot 6d):     {_a0[3:9].tolist()}")
-        print(f"  predicted action (gripper):    {_a0[9].item():.4f}")
-        print("=== END DIAGNOSTIC ===\n")
 
     # --- output directory ---
     if args.output_dir is not None:
@@ -557,6 +491,7 @@ if __name__ == "__main__":
     n_success = 0
     n_total = 0
     all_trial_records = []  # list of dicts, one per env per round
+    all_parts_poses_traces = []  # (T+1, 35) array per completed round, env 0 only
     resuming = False
 
     if args.resume:
@@ -598,14 +533,10 @@ if __name__ == "__main__":
     for i in range(i_start, n_rounds):
         t_start = time.time()
         video_budget = args.n_video_trials if args.n_video_trials >= 0 else args.n_rollouts
-        record_this_round = args.save_video and (n_total < video_budget or args.record_failures)
-        # If using dataset initial states, cycle through them round by round.
-        round_init_states = None
-        if dataset_init_states is not None:
-            start = (i * args.n_envs) % len(dataset_init_states)
-            round_init_states = [
-                dataset_init_states[(start + e) % len(dataset_init_states)] for e in range(args.n_envs)
-            ]
+        if args.record_failures:
+            record_this_round = args.save_video
+        else:
+            record_this_round = args.save_video and (n_total < video_budget)
 
         round_result = run_rollout(
             env=env,
@@ -616,10 +547,16 @@ if __name__ == "__main__":
             obs_keys=policy_obs_keys,
             record_video=record_this_round,
             n_action_steps=n_action_steps,
-            init_states=round_init_states,
-            verbose=(dataset_init_states is not None and i == i_start),
         )
         rollout_time = time.time() - t_start
+
+        # Always collect the trace, even if the rollout was cut short.
+        if len(round_result["parts_poses_trace"]) > 0:
+            all_parts_poses_traces.append(round_result["parts_poses_trace"])
+
+        if round_result["interrupted"]:
+            print("\nInterrupted — generating parts-poses trace plot…")
+            break
 
         # Stop saving trial records once we reach n_rollouts (so we have exactly n_rollouts records)
         for env_idx in range(args.n_envs):
@@ -642,9 +579,10 @@ if __name__ == "__main__":
 
             if record_this_round:
                 save_this_video = False
-                if trial_num <= video_budget:
-                    save_this_video = True
-                elif args.record_failures and result_str != "success":
+                if args.record_failures:
+                    if result_str != "success":
+                        save_this_video = True
+                elif trial_num <= video_budget:
                     save_this_video = True
 
                 if save_this_video:
@@ -653,7 +591,8 @@ if __name__ == "__main__":
                     print(f"  Saved video: {video_path.name}")
 
         # Write text summary file
-        _write_summary(n_success, n_total, all_trial_records, summary_path)
+        if n_total > 0:
+            _write_summary(n_success, n_total, all_trial_records, summary_path)
 
         # Write intermediate pickle after every round
         pkl_path = out_dir / "results.pkl"
@@ -673,19 +612,27 @@ if __name__ == "__main__":
                 f,
             )
 
-        success_rate = n_success / n_total
-        video_tag = "video=on" if record_this_round else "video=off"
-        total_time = time.time() - t_start
-        print(
-            f"Round {i + 1}/{n_rounds} [{video_tag}]: rollout time={rollout_time:.1f}s, total time={total_time:.1f}s, "
-            f"result={round_result['result']}  running {n_success}/{n_total} ({success_rate:.1%})"
-        )
+        if n_total > 0:
+            success_rate = n_success / n_total
+            video_tag = "video=on" if record_this_round else "video=off"
+            total_time = time.time() - t_start
+            print(
+                f"Round {i + 1}/{n_rounds} [{video_tag}]: rollout time={rollout_time:.1f}s, total time={total_time:.1f}s, "
+                f"result={round_result['result']}  running {n_success}/{n_total} ({success_rate:.1%})"
+            )
 
     csv_file.close()
 
-    final_success_rate = n_success / n_total
-    print(f"\nFinal success rate: {n_success}/{n_total} ({final_success_rate:.1%})")
+    if n_total > 0:
+        final_success_rate = n_success / n_total
+        print(f"\nFinal success rate: {n_success}/{n_total} ({final_success_rate:.1%})")
     print(f"Results written to {out_dir}/")
+
+    # --- parts-poses trace plot ---
+    if all_parts_poses_traces:
+        _plot_parts_poses_traces(all_parts_poses_traces, reference_parts_poses)
+    else:
+        print("No rollout data collected; skipping trace plot.")
 
     # IsaacGym's C++ destructors segfault during normal Python shutdown.
     # os._exit bypasses all cleanup and exits immediately with a clean code.

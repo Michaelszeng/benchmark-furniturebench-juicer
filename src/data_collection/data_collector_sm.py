@@ -333,7 +333,7 @@ class DataCollectorSpaceMouse:
 
                         continue
 
-                    if np.allclose(dpos, 0.0) and np.allclose(drot_xyz, 0.0):
+                    if np.allclose(dpos, 0.0) and np.allclose(drot_xyz, 0.0) and not sm.is_button_pressed(0):
                         action_taken = False
                         if target_pose_last_action_rv is None:
                             translation, quat_xyzw = self.env.get_ee_pose()
@@ -354,7 +354,7 @@ class DataCollectorSpaceMouse:
                         action_taken = True
 
                     kb_grasp = prev_keyboard_gripper != keyboard_action[-1]
-                    sm_grasp = (sm.is_button_pressed(0) or sm.is_button_pressed(1)) and ready_to_grasp
+                    sm_grasp = sm.is_button_pressed(1) and ready_to_grasp
                     if kb_grasp or sm_grasp:
                         # env.gripper_close() if gripper_open else env.gripper_open()
                         grasp_flag = -1 * grasp_flag
@@ -366,7 +366,15 @@ class DataCollectorSpaceMouse:
 
                     new_target_pose_rv = target_pose_rv.copy()
                     new_target_pose_rv[:3] += dpos
-                    new_target_pose_rv[3:] = (drot * st.Rotation.from_rotvec(target_pose_rv[3:])).as_rotvec()
+                    
+                    current_rot = st.Rotation.from_rotvec(target_pose_rv[3:])
+                    if sm.is_button_pressed(0):
+                        local_z_rot = st.Rotation.from_euler("z", args.max_rot_speed / frequency)
+                        new_rot = drot * current_rot * local_z_rot
+                    else:
+                        new_rot = drot * current_rot
+                        
+                    new_target_pose_rv[3:] = new_rot.as_rotvec()
 
                     target_pose_mat = pose_rv2mat(target_pose_rv)
                     if target_pose_last_action_rv is not None:

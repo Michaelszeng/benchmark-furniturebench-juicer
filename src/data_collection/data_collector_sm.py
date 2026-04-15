@@ -366,14 +366,14 @@ class DataCollectorSpaceMouse:
 
                     new_target_pose_rv = target_pose_rv.copy()
                     new_target_pose_rv[:3] += dpos
-                    
+
                     current_rot = st.Rotation.from_rotvec(target_pose_rv[3:])
                     if sm.is_button_pressed(0):
-                        local_z_rot = st.Rotation.from_euler("z", args.max_rot_speed / frequency)
+                        local_z_rot = st.Rotation.from_euler("z", -args.max_rot_speed / frequency)
                         new_rot = drot * current_rot * local_z_rot
                     else:
                         new_rot = drot * current_rot
-                        
+
                     new_target_pose_rv[3:] = new_rot.as_rotvec()
 
                     target_pose_mat = pose_rv2mat(target_pose_rv)

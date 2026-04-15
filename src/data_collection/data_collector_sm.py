@@ -235,7 +235,7 @@ class DataCollectorSpaceMouse:
 
         args.frequency = 10
         args.command_latency = 0.01
-        args.deadzone = 0.05
+        args.deadzone = 0.1
         if self.env.ctrl_mode == "diffik":
             args.max_pos_speed = 0.3
             args.max_rot_speed = 0.7
@@ -333,7 +333,7 @@ class DataCollectorSpaceMouse:
 
                         continue
 
-                    if np.allclose(dpos, 0.0) and np.allclose(drot_xyz, 0.0) and not sm.is_button_pressed(0):
+                    if np.allclose(dpos, 0.0) and np.allclose(drot_xyz, 0.0) and not sm.is_button_pressed(0) and not getattr(self.device_interface, "space_pressed", False):
                         action_taken = False
                         if target_pose_last_action_rv is None:
                             translation, quat_xyzw = self.env.get_ee_pose()
@@ -370,6 +370,9 @@ class DataCollectorSpaceMouse:
                     current_rot = st.Rotation.from_rotvec(target_pose_rv[3:])
                     if sm.is_button_pressed(0):
                         local_z_rot = st.Rotation.from_euler("z", -args.max_rot_speed / frequency)
+                        new_rot = drot * current_rot * local_z_rot
+                    elif getattr(self.device_interface, "space_pressed", False):
+                        local_z_rot = st.Rotation.from_euler("z", args.max_rot_speed / frequency)
                         new_rot = drot * current_rot * local_z_rot
                     else:
                         new_rot = drot * current_rot

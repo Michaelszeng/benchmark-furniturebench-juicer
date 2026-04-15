@@ -48,8 +48,12 @@ class KeyboardInterface(DeviceInterface):
         self.rew_key = 0
 
         self.key_enum = CollectEnum.DONE_FALSE
+        self.space_pressed = False
 
     def on_press(self, k):
+        if k == Key.space:
+            self.space_pressed = True
+            return
         try:
             k = k.char
 
@@ -93,6 +97,9 @@ class KeyboardInterface(DeviceInterface):
             pass
 
     def on_release(self, k):
+        if k == Key.space:
+            self.space_pressed = False
+            return
         try:
             # Terminates keyboard monitoring.
             if k == Key.esc:

@@ -211,7 +211,7 @@ You can now safely delete the downloaded zipped file and navigate back to the ro
 
 ### Install FurnitureBench
 
-To allow for data collection with the SpaceMouse, etc. we used a [custom fork](https://github.com/ankile/furniture-bench/tree/iros-2024-release-v1) of the [FurnitureBench code](https://github.com/clvrai/furniture-bench). The fork is included in this codebase as a submodule. To install the FurnitureBench package, first run:
+To allow for data collection with the SpaceMouse, etc. we used a [custom fork](https://github.com/Michaelszeng/furniture-bench/tree/iros-2024-release-v1) of the [FurnitureBench code](https://github.com/clvrai/furniture-bench). The fork is included in this codebase as a submodule. To install the FurnitureBench package, first run:
 
 ```bash
 git clone --recursive git@github.com:ankile/imitation-juicer.git

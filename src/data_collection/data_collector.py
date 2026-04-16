@@ -75,7 +75,6 @@ class DataCollector:
             record_failures (bool): If True, also save videos of all failed trials beyond n_video_trials.
             num_envs (int): Number of parallel Isaac Gym environments. Only supported for scripted sim collection.
         """
-        np.random.seed(2043961395)
         if is_sim:
             self.env = gym.make(
                 "FurnitureSimFull-v0",
@@ -92,7 +91,8 @@ class DataCollector:
                 graphics_device_id=graphics_device_id,
                 ctrl_mode=ctrl_mode,
                 no_noise=no_noise,
-                dart_amount=dart_amount,
+                corr_noise_alpha=0.8,
+                non_markovian=non_markovian,
             )
         else:
             if num_envs > 1:
@@ -150,6 +150,13 @@ class DataCollector:
 
     def _reset_all_buffers(self):
         self._bufs = [self._make_empty_buffers() for _ in range(self.num_envs)]
+
+    def _count_pkl_files(self) -> int:
+        """Count existing .pkl / .pkl.xz files in the output directory."""
+        count = 0
+        for pattern in ("*.pkl", "*.pkl.xz"):
+            count += sum(1 for _ in self.data_path.rglob(pattern))
+        return count
 
     def _reset_env_buffer(self, env_idx: int):
         self._bufs[env_idx] = self._make_empty_buffers()
@@ -226,6 +233,7 @@ class DataCollector:
         print("[data collection] Start collecting the data!")
 
         # Full initial reset of all envs.
+        np.random.seed(self._count_pkl_files() + 1)
         obs = self.env.reset()
         self._reset_all_buffers()
         for env_idx in range(self.num_envs):
@@ -268,6 +276,7 @@ class DataCollector:
                     self.traj_counter += 1
                     print(f"[env {env_idx}] Saved {self.traj_counter} trajectories in this run.")
 
+                    np.random.seed(self._count_pkl_files() + 1)
                     self._reset_single_env(env_idx)
                     self._configure_episode(env_idx)
                     self._reset_env_buffer(env_idx)

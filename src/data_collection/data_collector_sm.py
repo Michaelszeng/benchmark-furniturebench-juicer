@@ -86,6 +86,8 @@ class DataCollectorSpaceMouse:
         right_multiply_rot: bool = True,
         compress_pickles: bool = False,
         resume_trajectory_paths: Union[List[str], None] = None,
+        show_wrist_cam: bool = False,
+        seed: int = 0,
     ):
         """
         Args:
@@ -104,6 +106,7 @@ class DataCollectorSpaceMouse:
             ctrl_mode (str): 'osc' (joint torque, with operation space control) or 'diffik' (joint impedance, with differential inverse kinematics control)
             ee_laser (bool): If True, show a line coming from the end-effector in the viewer
             right_multiply_rot (bool): If True, convert rotation actions (delta rot) assuming they're applied as RIGHT multiplys (local rotations)
+            seed (int): Base random seed. Effective seed = seed + number of existing pkl files, so the same (seed, count) pair always produces the same initialization.
         """
         if not draw_marker:
             from furniture_bench.envs import furniture_sim_env
@@ -160,6 +163,7 @@ class DataCollectorSpaceMouse:
         self.resize_sim_img = resize_sim_img
         self.compress_pickles = compress_pickles
         self.resume_trajectory_paths = resume_trajectory_paths
+        self.show_wrist_cam = show_wrist_cam
 
         self.iter_idx = 0
 
@@ -180,8 +184,14 @@ class DataCollectorSpaceMouse:
 
         # our flags
         self.right_multiply_rot = right_multiply_rot
+        self.seed = seed
 
         self._reset_collector_buffer()
+
+        if self.show_wrist_cam:
+            import cv2
+
+            cv2.namedWindow("Wrist Camera", cv2.WINDOW_AUTOSIZE)
 
     def _squeeze_and_numpy(self, d: Dict[str, Union[torch.Tensor, np.ndarray, float, int, None]]):
         """
@@ -228,7 +238,7 @@ class DataCollectorSpaceMouse:
 
         args.frequency = 10
         args.command_latency = 0.01
-        args.deadzone = 0.05
+        args.deadzone = 0.06
         if self.env.ctrl_mode == "diffik":
             args.max_pos_speed = 0.3
             args.max_rot_speed = 0.7
@@ -294,7 +304,6 @@ class DataCollectorSpaceMouse:
 
                     # get teleop command
                     sm_state = sm.get_motion_state_transformed()
-                    print("sm_state", sm_state)
                     dpos = sm_state[:3] * (args.max_pos_speed / frequency)
                     drot_xyz = sm_state[3:] * (args.max_rot_speed / frequency)
                     drot = st.Rotation.from_euler("xyz", drot_xyz)
@@ -327,7 +336,12 @@ class DataCollectorSpaceMouse:
 
                         continue
 
-                    if np.allclose(dpos, 0.0) and np.allclose(drot_xyz, 0.0):
+                    if (
+                        np.allclose(dpos, 0.0)
+                        and np.allclose(drot_xyz, 0.0)
+                        and not sm.is_button_pressed(0)
+                        and not getattr(self.device_interface, "space_pressed", False)
+                    ):
                         action_taken = False
                         if target_pose_last_action_rv is None:
                             translation, quat_xyzw = self.env.get_ee_pose()
@@ -348,7 +362,7 @@ class DataCollectorSpaceMouse:
                         action_taken = True
 
                     kb_grasp = prev_keyboard_gripper != keyboard_action[-1]
-                    sm_grasp = (sm.is_button_pressed(0) or sm.is_button_pressed(1)) and ready_to_grasp
+                    sm_grasp = sm.is_button_pressed(1) and ready_to_grasp
                     if kb_grasp or sm_grasp:
                         # env.gripper_close() if gripper_open else env.gripper_open()
                         grasp_flag = -1 * grasp_flag
@@ -360,7 +374,18 @@ class DataCollectorSpaceMouse:
 
                     new_target_pose_rv = target_pose_rv.copy()
                     new_target_pose_rv[:3] += dpos
-                    new_target_pose_rv[3:] = (drot * st.Rotation.from_rotvec(target_pose_rv[3:])).as_rotvec()
+
+                    current_rot = st.Rotation.from_rotvec(target_pose_rv[3:])
+                    if sm.is_button_pressed(0):
+                        local_z_rot = st.Rotation.from_euler("z", -args.max_rot_speed / frequency)
+                        new_rot = drot * current_rot * local_z_rot
+                    elif getattr(self.device_interface, "space_pressed", False):
+                        local_z_rot = st.Rotation.from_euler("z", args.max_rot_speed / frequency)
+                        new_rot = drot * current_rot * local_z_rot
+                    else:
+                        new_rot = drot * current_rot
+
+                    new_target_pose_rv[3:] = new_rot.as_rotvec()
 
                     target_pose_mat = pose_rv2mat(target_pose_rv)
                     if target_pose_last_action_rv is not None:
@@ -432,8 +457,16 @@ class DataCollectorSpaceMouse:
                         ready_to_grasp = True
                         target_pose_last_action_rv = None
 
-                        gripper_open = gripper_width >= 0.95
-                        grasp_flag = torch.from_numpy(np.array([-1 if gripper_open else 1])).to(self.env.device)
+                        (
+                            target_pose_rv,
+                            gripper_width,
+                            gripper_open,
+                            grasp_flag,
+                        ) = self.set_target_pose()
+
+                        if hasattr(self.device_interface, "reset"):
+                            self.device_interface.reset()
+                        prev_keyboard_gripper = -1
 
                         continue
 
@@ -486,6 +519,22 @@ class DataCollectorSpaceMouse:
                     if (not self.robot_settled) and ((datetime.now() - self.starttime).seconds > self.start_delay):
                         self.robot_settled = True
                         print("Robot settled")
+
+                    if self.show_wrist_cam and "color_image1" in obs:
+                        import cv2
+
+                        img = obs["color_image1"]
+                        if isinstance(img, torch.Tensor):
+                            img = img.cpu().numpy().squeeze()
+                        elif isinstance(img, np.ndarray):
+                            img = img.squeeze()
+
+                        if img.shape[-1] == 3:
+                            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                            # Resize to 1/2x
+                            img_bgr = cv2.resize(img_bgr, (img_bgr.shape[1] // 2, img_bgr.shape[0] // 2))
+                            cv2.imshow("Wrist Camera", img_bgr)
+                            cv2.waitKey(1)
 
                 self.verbose_print(f"Collected {self.traj_counter} / {self.num_demos} successful trajectories!")
 
@@ -558,11 +607,12 @@ class DataCollectorSpaceMouse:
 
         # We'll update the steps counter whenever we store an observation
         if not setup_phase:
-            print(
-                f"{[self.step_counter]} assembled: {self.env.furniture.assembled_set} "
-                f"num assembled: {len(self.env.furniture.assembled_set)} "
-                f"Skill: {len(self.skill_set)}."
-            )
+            # print(
+            #     f"{[self.step_counter]} assembled: {self.env.furniture.assembled_set} "
+            #     f"num assembled: {len(self.env.furniture.assembled_set)} "
+            #     f"Skill: {len(self.skill_set)}."
+            # )
+            pass
 
     @property
     def step_counter(self):
@@ -571,10 +621,18 @@ class DataCollectorSpaceMouse:
     def save_and_reset(self, collect_enum: CollectEnum, info):
         """Saves the collected data and reset the environment."""
         self.save(collect_enum, info)
-        self.verbose_print(f"Saved {self.traj_counter} trajectories in this run.")
+        self.verbose_print(f"Saved {self.traj_counter + 1} trajectories in this run.")
         return self.reset()
 
+    def _count_pkl_files(self) -> int:
+        """Count existing .pkl / .pkl.xz files in the output directory."""
+        count = 0
+        for pattern in ("*.pkl", "*.pkl.xz"):
+            count += sum(1 for _ in self.data_path.rglob(pattern))
+        return count
+
     def reset(self):
+        np.random.seed(self.seed + self._count_pkl_files())
         obs = self.env.reset()
 
         print("State from reset:")

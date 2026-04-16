@@ -12,6 +12,7 @@ Usage:
         --n-action-steps 1
 """
 
+import isaacgym  # MUST be imported before torch!
 import argparse
 import collections
 import csv
@@ -34,6 +35,7 @@ from omegaconf import OmegaConf
 from src.common.geometry import proprioceptive_quat_to_6d_rotation
 from src.common.tasks import task_timeout
 from src.data_processing.utils import resize, resize_crop
+from src.visualization.render_mp4 import unpickle_data
 
 # Register the "eval" resolver used in diffusion_policy configs.
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -42,6 +44,33 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 # robot_state dict that FurnitureSimFull-v0 returns.  Order must match
 # filter_and_concat_robot_state / ROBOT_STATES in furniture_bench.
 _ROBOT_STATE_KEYS = ["ee_pos", "ee_quat", "ee_pos_vel", "ee_ori_vel", "gripper_width"]
+
+# Per-dimension label for one part's 7-D pose block [x y z qx qy qz qw].
+_POSE_DIM_NAMES = ["x", "y", "z", "qx", "qy", "qz", "qw"]
+
+
+def quat_xyzw_to_6d(quat: torch.Tensor) -> torch.Tensor:
+    """
+    Use custom function to convert quaternion to 6D rotation to match training conversion function.
+    """
+    qx, qy, qz, qw = quat[..., 0], quat[..., 1], quat[..., 2], quat[..., 3]
+    col0 = torch.stack(
+        [
+            1 - 2 * (qy**2 + qz**2),
+            2 * (qx * qy + qz * qw),
+            2 * (qx * qz - qy * qw),
+        ],
+        dim=-1,
+    )
+    col1 = torch.stack(
+        [
+            2 * (qx * qy - qz * qw),
+            1 - 2 * (qx**2 + qz**2),
+            2 * (qy * qz + qx * qw),
+        ],
+        dim=-1,
+    )
+    return torch.cat([col0, col1], dim=-1)
 
 
 def preprocess_obs(obs: dict, device: torch.device, obs_keys: set) -> dict:
@@ -70,7 +99,15 @@ def preprocess_obs(obs: dict, device: torch.device, obs_keys: set) -> dict:
         # resize_crop() matches data_collector.py: 1280x720 → 320x240 center-crop.
         result["color_image2"] = resize_crop(obs["color_image2"]).float().to(device)
     if "parts_poses" in obs_keys:
-        result["parts_poses"] = obs["parts_poses"].float().to(device)
+        parts_poses = obs["parts_poses"].float().to(device)
+        shape = parts_poses.shape
+        n_parts = shape[-1] // 7
+        parts_poses = parts_poses.view(*shape[:-1], n_parts, 7)
+        pos = parts_poses[..., :3]
+        quat = parts_poses[..., 3:]
+        rot_6d = quat_xyzw_to_6d(quat)
+        parts_poses_6d = torch.cat([pos, rot_6d], dim=-1)
+        result["parts_poses"] = parts_poses_6d.view(*shape[:-1], n_parts * 9)
     return result
 
 
@@ -133,6 +170,98 @@ def load_policy(checkpoint_path: str, device: torch.device):
     return policy, cfg
 
 
+def load_reference_pkl_parts_poses(pkl_path: str) -> np.ndarray:
+    """Load parts_poses from all timesteps of a reference pkl file.
+
+    Returns array of shape (T, 35).
+    """
+    data = unpickle_data(Path(pkl_path))
+    obs = data["observations"]
+    parts_poses = np.array([o["parts_poses"] for o in obs], dtype=np.float32)
+    # parts_poses may be stored with shape (35,) or (1, 35) per timestep; flatten
+    if parts_poses.ndim == 3:
+        parts_poses = parts_poses.squeeze(1)
+    return parts_poses  # (T, 35)
+
+
+def _plot_parts_poses_traces(
+    rollout_traces: list,
+    reference_traces,
+) -> None:
+    """Display a live parts-poses trace plot.
+
+    Args:
+        rollout_traces: list of (T_i, 35) np.ndarray, one per rollout round.
+                        Each row is one timestep's flattened parts_poses.
+        reference_traces: (T_ref, 35) np.ndarray, or None.
+                          Full-episode parts_poses from the reference pkl.
+    """
+    import matplotlib.pyplot as plt
+
+    n_parts = 5
+    # 10 distinguishable colours, one per pose dimension (7 used).
+    colors = [
+        "#e6194b",
+        "#3cb44b",
+        "#4363d8",
+        "#f58231",
+        "#911eb4",
+        "#42d4f4",
+        "#f032e6",
+    ]
+
+    fig, axes = plt.subplots(n_parts, 1, figsize=(14, 4 * n_parts), squeeze=False)
+    axes = axes[:, 0]  # (n_parts,)
+
+    for part_idx in range(n_parts):
+        ax = axes[part_idx]
+        base = part_idx * 7
+
+        # --- rollout traces (solid, slightly transparent when multiple rounds) ---
+        alpha = max(0.35, 1.0 - 0.15 * len(rollout_traces))
+        for round_idx, trace in enumerate(rollout_traces):
+            for dim_idx, dim_name in enumerate(_POSE_DIM_NAMES):
+                ax.plot(
+                    trace[:, base + dim_idx],
+                    color=colors[dim_idx],
+                    alpha=alpha,
+                    linewidth=1.4,
+                    label=f"rollout {dim_name}" if round_idx == 0 else None,
+                )
+
+        # --- reference pkl traces (dashed, full opacity) ---
+        if reference_traces is not None:
+            for dim_idx, dim_name in enumerate(_POSE_DIM_NAMES):
+                ax.plot(
+                    reference_traces[:, base + dim_idx],
+                    color=colors[dim_idx],
+                    alpha=1.0,
+                    linewidth=2.0,
+                    linestyle="--",
+                    label=f"pkl {dim_name}",
+                )
+
+        ax.set_title(f"Part {part_idx} poses over time", fontsize=11)
+        ax.set_xlabel("Step")
+        ax.set_ylabel("Value")
+        ax.legend(
+            loc="upper right",
+            fontsize=7,
+            ncol=2,
+            framealpha=0.7,
+        )
+        ax.grid(True, alpha=0.25)
+
+    fig.suptitle(
+        f"Parts poses: {len(rollout_traces)} rollout(s)"
+        + (" vs reference pkl" if reference_traces is not None else ""),
+        fontsize=13,
+        y=1.002,
+    )
+    plt.tight_layout()
+    plt.show()
+
+
 def _write_mp4(frames: list, path: Path, fps: int = 10) -> None:
     """Write a list of (H, W, 3) uint8 numpy frames to an MP4 file."""
     with imageio.get_writer(path, fps=fps, codec="libx264", pixelformat="yuv420p") as writer:
@@ -182,68 +311,76 @@ def run_rollout(
     """Run one round of parallel rollouts.
 
     Returns a dict with per-env arrays:
-        success      (n_envs,) bool
-        total_reward (n_envs,) float
-        result       (n_envs,) str — "success", "timeout", or "failure"
-        steps        int — total steps executed this round
-        frames       (n_envs,) list[np.ndarray] — only present if record_video=True;
-                     each element is a list of (H, W*2, 3) uint8 frames (cam1 | cam2)
+        success           (n_envs,) bool
+        total_reward      (n_envs,) float
+        result            (n_envs,) str — "success", "timeout", or "failure"
+        steps             int — total steps executed this round
+        steps_per_env     (n_envs,) int
+        parts_poses_trace (T+1, 35) float32 — env-0 parts_poses at every timestep
+                          (initial obs + one entry per env.step call); may be
+                          shorter than rollout_max_steps if interrupted mid-rollout
+        interrupted       bool — True if a KeyboardInterrupt cut the rollout short
+        frames            (n_envs,) list[np.ndarray] — only present if record_video=True;
+                          each element is a list of (H, W*2, 3) uint8 frames (cam1 | cam2)
     """
     n_envs = env.num_envs
-    obs = env.reset()
-    preprocessed = preprocess_obs(obs, device, obs_keys)
-    obs_deque = collections.deque([preprocessed] * n_obs_steps, maxlen=n_obs_steps)
-    action_queue: collections.deque = collections.deque()
+
+    # Initialise accumulators before env.reset() so a Ctrl+C during reset still
+    # produces a valid (possibly empty) return value.
+    parts_poses_trace: list = []
+    interrupted = False
 
     done = torch.zeros((n_envs, 1), dtype=torch.bool, device=device)
     total_reward = torch.zeros(n_envs, device=device)
-    # Track the step at which each env first became done (-1 = never done).
     done_step = torch.full((n_envs,), -1, dtype=torch.long, device=device)
     step = 0
-
-    # Per-env frame buffers: list of lists of (H, W*2, 3) uint8 numpy arrays.
     if record_video:
         frame_buffers = [[] for _ in range(n_envs)]
 
-    while not done.all() and step < rollout_max_steps:
-        if len(action_queue) == 0:
-            obs_dict = build_obs_dict(obs_deque, device)
-            poses_flat = obs_dict["obs"]["parts_poses"].flatten().tolist()
-            print("parts_poses:")
-            for i in range(len(poses_flat) // n_obs_steps, len(poses_flat), 7):
-                row_str = ", ".join([f"{x:8.4f}" for x in poses_flat[i : i + 7]])
-                print(f"  [{row_str}]")
-            result = policy.predict_action(obs_dict, use_DDIM=True)
-            start = n_obs_steps - 1
-            actions = result["action_pred"][:, start:]
-            n_steps = n_action_steps if n_action_steps is not None else policy.n_action_steps
-            for t in range(n_steps):
-                action_queue.append(actions[:, t, :])
-
-        action = action_queue.popleft()
-        obs, reward, done, _ = env.step(action)
-        total_reward += reward.squeeze(-1).float()
-
-        # Record when each env finishes for the first time.
-        newly_done = done.squeeze(-1) & (done_step == -1)
-        done_step[newly_done] = step
+    try:
+        obs = env.reset()
+        parts_poses_trace.append(obs["parts_poses"][0].cpu().numpy())  # initial obs
 
         preprocessed = preprocess_obs(obs, device, obs_keys)
+        obs_deque = collections.deque([preprocessed] * n_obs_steps, maxlen=n_obs_steps)
+        action_queue: collections.deque = collections.deque()
 
-        if record_video:
-            if "color_image1" in preprocessed:
-                imgs1 = preprocessed["color_image1"].cpu().numpy().astype(np.uint8)
-                imgs2 = preprocessed["color_image2"].cpu().numpy().astype(np.uint8)
-            else:
-                # State-based policy: images aren't in preprocessed but are in obs.
-                imgs1 = resize(obs["color_image1"]).cpu().numpy().astype(np.uint8)
-                imgs2 = resize_crop(obs["color_image2"]).cpu().numpy().astype(np.uint8)
-            for env_idx in range(n_envs):
-                side_by_side = np.concatenate([imgs1[env_idx], imgs2[env_idx]], axis=1)
-                frame_buffers[env_idx].append(side_by_side)
+        while not done.all() and step < rollout_max_steps:
+            if len(action_queue) == 0:
+                obs_dict = build_obs_dict(obs_deque, device)
+                result = policy.predict_action(obs_dict, use_DDIM=True)
+                start = n_obs_steps - 1
+                actions = result["action_pred"][:, start:]
+                n_steps = n_action_steps if n_action_steps is not None else policy.n_action_steps
+                for t in range(n_steps):
+                    action_queue.append(actions[:, t, :])
 
-        obs_deque.append(preprocessed)
-        step += 1
+            action = action_queue.popleft()
+            obs, reward, done, _ = env.step(action)
+            total_reward += reward.squeeze(-1).float()
+
+            newly_done = done.squeeze(-1) & (done_step == -1)
+            done_step[newly_done] = step
+
+            preprocessed = preprocess_obs(obs, device, obs_keys)
+
+            if record_video:
+                if "color_image1" in preprocessed:
+                    imgs1 = preprocessed["color_image1"].cpu().numpy().astype(np.uint8)
+                    imgs2 = preprocessed["color_image2"].cpu().numpy().astype(np.uint8)
+                else:
+                    imgs1 = resize(obs["color_image1"]).cpu().numpy().astype(np.uint8)
+                    imgs2 = resize_crop(obs["color_image2"]).cpu().numpy().astype(np.uint8)
+                for env_idx in range(n_envs):
+                    side_by_side = np.concatenate([imgs1[env_idx], imgs2[env_idx]], axis=1)
+                    frame_buffers[env_idx].append(side_by_side)
+
+            parts_poses_trace.append(obs["parts_poses"][0].cpu().numpy())
+            obs_deque.append(preprocessed)
+            step += 1
+
+    except KeyboardInterrupt:
+        interrupted = True
 
     n_parts = len(env.furniture.should_be_assembled)
     success_mask = (total_reward >= n_parts).cpu().numpy()
@@ -254,13 +391,10 @@ def run_rollout(
         if success_mask[env_idx]:
             results.append("success")
         elif done_step_np[env_idx] == -1:
-            # Never went done — ran out of steps.
             results.append("timeout")
         else:
             results.append("failure")
 
-    # Per-env step count: how many steps each individual trial ran.
-    # done_step == -1 means the env never signalled done (timeout), so it ran for all steps.
     steps_per_env = np.where(done_step_np >= 0, done_step_np + 1, step)
 
     out = {
@@ -269,6 +403,8 @@ def run_rollout(
         "result": results,
         "steps": step,
         "steps_per_env": steps_per_env,
+        "parts_poses_trace": np.stack(parts_poses_trace) if parts_poses_trace else np.empty((0, 35), dtype=np.float32),
+        "interrupted": interrupted,
     }
     if record_video:
         out["frames"] = frame_buffers
@@ -320,10 +456,23 @@ if __name__ == "__main__":
         default=False,
         help="Resume from an existing results.pkl in --output-dir (requires --output-dir)",
     )
+    parser.add_argument(
+        "--reference-pkl",
+        type=str,
+        default=None,
+        help="Path to a reference pkl file whose parts_poses are overlaid on the trace plot.",
+    )
     args = parser.parse_args()
 
     if args.resume and args.output_dir is None:
         parser.error("--resume requires --output-dir to be specified")
+
+    # Load reference pkl parts_poses if provided.
+    reference_parts_poses = None
+    if args.reference_pkl is not None:
+        print(f"Loading reference pkl parts_poses from {args.reference_pkl}")
+        reference_parts_poses = load_reference_pkl_parts_poses(args.reference_pkl)
+        print(f"  Reference trajectory length: {len(reference_parts_poses)} steps")
 
     device = torch.device(args.device)
 
@@ -348,8 +497,8 @@ if __name__ == "__main__":
     # FurnitureSimFull-v0 mirrors the data-collection environment:
     # - obs_keys=FULL_OBS (cameras + all state keys), robot_state returned as dict
     # - act_rot_repr="rot_6d" so env.step accepts the policy's 10-D actions directly
-    # - resize_img=False: env returns 1280x720 images; preprocess_obs applies
-    #   same resize/resize_crop as data_collector.py.
+    # - resize_img=False: env returns full-res 1280x720 images; preprocess_obs applies
+    #   the same resize/resize_crop as data_collector.py.
     env = gym.make(
         "FurnitureSimFull-v0",
         furniture=args.furniture,
@@ -380,6 +529,7 @@ if __name__ == "__main__":
     n_success = 0
     n_total = 0
     all_trial_records = []  # list of dicts, one per env per round
+    all_parts_poses_traces = []  # (T+1, 35) array per completed round, env 0 only
     resuming = False
 
     if args.resume:
@@ -438,6 +588,14 @@ if __name__ == "__main__":
         )
         rollout_time = time.time() - t_start
 
+        # Always collect the trace, even if the rollout was cut short.
+        if len(round_result["parts_poses_trace"]) > 0:
+            all_parts_poses_traces.append(round_result["parts_poses_trace"])
+
+        if round_result["interrupted"]:
+            print("\nInterrupted — generating parts-poses trace plot…")
+            break
+
         # Stop saving trial records once we reach n_rollouts (so we have exactly n_rollouts records)
         for env_idx in range(args.n_envs):
             if n_total >= args.n_rollouts:
@@ -471,7 +629,8 @@ if __name__ == "__main__":
                     print(f"  Saved video: {video_path.name}")
 
         # Write text summary file
-        _write_summary(n_success, n_total, all_trial_records, summary_path)
+        if n_total > 0:
+            _write_summary(n_success, n_total, all_trial_records, summary_path)
 
         # Write intermediate pickle after every round
         pkl_path = out_dir / "results.pkl"
@@ -491,19 +650,27 @@ if __name__ == "__main__":
                 f,
             )
 
-        success_rate = n_success / n_total
-        video_tag = "video=on" if record_this_round else "video=off"
-        total_time = time.time() - t_start
-        print(
-            f"Round {i + 1}/{n_rounds} [{video_tag}]: rollout time={rollout_time:.1f}s, total time={total_time:.1f}s, "
-            f"result={round_result['result']}  running {n_success}/{n_total} ({success_rate:.1%})"
-        )
+        if n_total > 0:
+            success_rate = n_success / n_total
+            video_tag = "video=on" if record_this_round else "video=off"
+            total_time = time.time() - t_start
+            print(
+                f"Round {i + 1}/{n_rounds} [{video_tag}]: rollout time={rollout_time:.1f}s, total time={total_time:.1f}s, "
+                f"result={round_result['result']}  running {n_success}/{n_total} ({success_rate:.1%})"
+            )
 
     csv_file.close()
 
-    final_success_rate = n_success / n_total
-    print(f"\nFinal success rate: {n_success}/{n_total} ({final_success_rate:.1%})")
+    if n_total > 0:
+        final_success_rate = n_success / n_total
+        print(f"\nFinal success rate: {n_success}/{n_total} ({final_success_rate:.1%})")
     print(f"Results written to {out_dir}/")
+
+    # --- parts-poses trace plot ---
+    if all_parts_poses_traces:
+        _plot_parts_poses_traces(all_parts_poses_traces, reference_parts_poses)
+    else:
+        print("No rollout data collected; skipping trace plot.")
 
     # IsaacGym's C++ destructors segfault during normal Python shutdown.
     # os._exit bypasses all cleanup and exits immediately with a clean code.

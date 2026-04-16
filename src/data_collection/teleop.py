@@ -43,9 +43,10 @@ def main():
         default="osc",
     )
     parser.add_argument(
-        "--draw-marker",
-        action="store_true",
-        help="If set, will draw an AprilTag marker on the furniture",
+        "--no-draw-marker",
+        action="store_false",
+        help="If set, will not draw an AprilTag marker on the furniture",
+        dest="draw_marker",
     )
     parser.add_argument(
         "--no-ee-laser",
@@ -58,6 +59,18 @@ def main():
         type=str,
         help="Directory to resume trajectories from",
         default=None,
+    )
+    parser.add_argument(
+        "--no-show-wrist-cam",
+        action="store_false",
+        help="If set, will not open a window showing the wrist camera view",
+        dest="show_wrist_cam",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Base random seed. Effective seed = seed + number of existing pkl files.",
     )
 
     args = parser.parse_args()
@@ -101,7 +114,21 @@ def main():
         ee_laser=args.ee_laser,
         compress_pickles=False,
         resume_trajectory_paths=pickle_paths,
+        show_wrist_cam=args.show_wrist_cam,
+        seed=args.seed,
     )
+    
+    print("\n" + "="*50)
+    print("INSTRUCTIONS:")
+    print("Press 'n' to discard the current episode and skip to the next one.")
+    print("Press 't' to manually save and skip to the next episode.")
+    print("The episode will automatically save and skip to the next one upon task success.")
+    print("="*50 + "\n")
+
+    # Automatically save and skip to next episode upon task success
+    if hasattr(data_collector.env, "unwrapped") and hasattr(data_collector.env.unwrapped, "manual_done"):
+        data_collector.env.unwrapped.manual_done = False
+
     data_collector.collect()
 
 

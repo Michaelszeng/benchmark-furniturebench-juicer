@@ -93,6 +93,7 @@ class DataCollector:
                 no_noise=no_noise,
                 corr_noise_alpha=0.8,
                 non_markovian=non_markovian,
+                dart_amount=dart_amount,
             )
         else:
             if num_envs > 1:

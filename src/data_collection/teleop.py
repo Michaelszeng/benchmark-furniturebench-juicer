@@ -66,6 +66,12 @@ def main():
         help="If set, will not open a window showing the wrist camera view",
         dest="show_wrist_cam",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Base random seed. Effective seed = seed + number of existing pkl files.",
+    )
 
     args = parser.parse_args()
 
@@ -109,6 +115,7 @@ def main():
         compress_pickles=False,
         resume_trajectory_paths=pickle_paths,
         show_wrist_cam=args.show_wrist_cam,
+        seed=args.seed,
     )
     
     print("\n" + "="*50)

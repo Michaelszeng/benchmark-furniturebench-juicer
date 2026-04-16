@@ -87,6 +87,7 @@ class DataCollectorSpaceMouse:
         compress_pickles: bool = False,
         resume_trajectory_paths: Union[List[str], None] = None,
         show_wrist_cam: bool = False,
+        seed: int = 0,
     ):
         """
         Args:
@@ -105,6 +106,7 @@ class DataCollectorSpaceMouse:
             ctrl_mode (str): 'osc' (joint torque, with operation space control) or 'diffik' (joint impedance, with differential inverse kinematics control)
             ee_laser (bool): If True, show a line coming from the end-effector in the viewer
             right_multiply_rot (bool): If True, convert rotation actions (delta rot) assuming they're applied as RIGHT multiplys (local rotations)
+            seed (int): Base random seed. Effective seed = seed + number of existing pkl files, so the same (seed, count) pair always produces the same initialization.
         """
         if not draw_marker:
             from furniture_bench.envs import furniture_sim_env
@@ -182,6 +184,7 @@ class DataCollectorSpaceMouse:
 
         # our flags
         self.right_multiply_rot = right_multiply_rot
+        self.seed = seed
 
         self._reset_collector_buffer()
 
@@ -629,7 +632,7 @@ class DataCollectorSpaceMouse:
         return count
 
     def reset(self):
-        np.random.seed(self._count_pkl_files() + 1)
+        np.random.seed(self.seed + self._count_pkl_files())
         obs = self.env.reset()
 
         print("State from reset:")

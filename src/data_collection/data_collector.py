@@ -72,7 +72,6 @@ class DataCollector:
             record_video (str | None): Which episodes to save as MP4. One of "all", "success", "failure", or None (no video).
             num_envs (int): Number of parallel Isaac Gym environments. Only supported for scripted sim collection.
         """
-        np.random.seed(2043961395)
         if is_sim:
             self.env = gym.make(
                 "FurnitureSimFull-v0",

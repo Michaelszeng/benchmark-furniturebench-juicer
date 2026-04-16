@@ -621,7 +621,15 @@ class DataCollectorSpaceMouse:
         self.verbose_print(f"Saved {self.traj_counter + 1} trajectories in this run.")
         return self.reset()
 
+    def _count_pkl_files(self) -> int:
+        """Count existing .pkl / .pkl.xz files in the output directory."""
+        count = 0
+        for pattern in ("*.pkl", "*.pkl.xz"):
+            count += sum(1 for _ in self.data_path.rglob(pattern))
+        return count
+
     def reset(self):
+        np.random.seed(self._count_pkl_files() + 1)
         obs = self.env.reset()
 
         print("State from reset:")

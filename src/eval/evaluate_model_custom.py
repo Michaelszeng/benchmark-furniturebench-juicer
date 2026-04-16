@@ -48,6 +48,30 @@ _ROBOT_STATE_KEYS = ["ee_pos", "ee_quat", "ee_pos_vel", "ee_ori_vel", "gripper_w
 _POSE_DIM_NAMES = ["x", "y", "z", "qx", "qy", "qz", "qw"]
 
 
+def quat_xyzw_to_6d(quat: torch.Tensor) -> torch.Tensor:
+    """
+    Use custom function to convert quaternion to 6D rotation to match training conversion function.
+    """
+    qx, qy, qz, qw = quat[..., 0], quat[..., 1], quat[..., 2], quat[..., 3]
+    col0 = torch.stack(
+        [
+            1 - 2 * (qy**2 + qz**2),
+            2 * (qx * qy + qz * qw),
+            2 * (qx * qz - qy * qw),
+        ],
+        dim=-1,
+    )
+    col1 = torch.stack(
+        [
+            2 * (qx * qy - qz * qw),
+            1 - 2 * (qx**2 + qz**2),
+            2 * (qy * qz + qx * qw),
+        ],
+        dim=-1,
+    )
+    return torch.cat([col0, col1], dim=-1)
+
+
 def preprocess_obs(obs: dict, device: torch.device, obs_keys: set) -> dict:
     """
     Handles both image-based policies (color_image1, color_image2, robot_state)
@@ -74,7 +98,15 @@ def preprocess_obs(obs: dict, device: torch.device, obs_keys: set) -> dict:
         # resize_crop() matches data_collector.py: 1280x720 → 320x240 center-crop.
         result["color_image2"] = resize_crop(obs["color_image2"]).float().to(device)
     if "parts_poses" in obs_keys:
-        result["parts_poses"] = obs["parts_poses"].float().to(device)
+        parts_poses = obs["parts_poses"].float().to(device)
+        shape = parts_poses.shape
+        n_parts = shape[-1] // 7
+        parts_poses = parts_poses.view(*shape[:-1], n_parts, 7)
+        pos = parts_poses[..., :3]
+        quat = parts_poses[..., 3:]
+        rot_6d = quat_xyzw_to_6d(quat)
+        parts_poses_6d = torch.cat([pos, rot_6d], dim=-1)
+        result["parts_poses"] = parts_poses_6d.view(*shape[:-1], n_parts * 9)
     return result
 
 
@@ -168,8 +200,13 @@ def _plot_parts_poses_traces(
     n_parts = 5
     # 10 distinguishable colours, one per pose dimension (7 used).
     colors = [
-        "#e6194b", "#3cb44b", "#4363d8", "#f58231",
-        "#911eb4", "#42d4f4", "#f032e6",
+        "#e6194b",
+        "#3cb44b",
+        "#4363d8",
+        "#f58231",
+        "#911eb4",
+        "#42d4f4",
+        "#f032e6",
     ]
 
     fig, axes = plt.subplots(n_parts, 1, figsize=(14, 4 * n_parts), squeeze=False)

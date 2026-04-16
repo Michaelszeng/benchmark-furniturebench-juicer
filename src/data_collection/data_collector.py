@@ -47,8 +47,10 @@ class DataCollector:
         compress_pickles: bool = False,
         verbose: bool = False,
         non_markovian: bool = False,
-        record_video: str = None,
+        n_video_trials: int = 0,
+        record_failures: bool = False,
         no_noise: bool = False,
+        dart_amount: float = 1.0,
         num_envs: int = 1,
     ):
         """
@@ -69,7 +71,8 @@ class DataCollector:
             resize_sim_img (bool): Read resized image.
             ctrl_mode (str): 'osc' (joint torque, with operation space control) or 'diffik' (joint impedance, with differential inverse kinematics control).
             compress_pickles (bool): Whether to compress the pickle files with gzip.
-            record_video (str | None): Which episodes to save as MP4. One of "all", "success", "failure", or None (no video).
+            n_video_trials (int): Save videos for the first N trials. Set to -1 to save all. Default 0 (no video).
+            record_failures (bool): If True, also save videos of all failed trials beyond n_video_trials.
             num_envs (int): Number of parallel Isaac Gym environments. Only supported for scripted sim collection.
         """
         np.random.seed(2043961395)
@@ -89,6 +92,7 @@ class DataCollector:
                 graphics_device_id=graphics_device_id,
                 ctrl_mode=ctrl_mode,
                 no_noise=no_noise,
+                dart_amount=dart_amount,
             )
         else:
             if num_envs > 1:
@@ -127,7 +131,9 @@ class DataCollector:
         self.compress_pickles = compress_pickles
         self.verbose = verbose
         self.non_markovian = non_markovian
-        self.record_video = record_video
+        self.n_video_trials = n_video_trials
+        self.record_failures = record_failures
+        self.n_videos_saved = 0
 
         self._reset_all_buffers()
 
@@ -349,15 +355,15 @@ class DataCollector:
             pickle_data(data, pkl_path)
             print(f"[env {env_idx}] Data saved at {pkl_path}")
 
-        should_record = (
-            self.record_video == "all"
-            or (self.record_video == "success" and data["success"])
-            or (self.record_video == "failure" and not data["success"])
+        video_budget = self.n_video_trials if self.n_video_trials >= 0 else float("inf")
+        should_record = self.n_videos_saved < video_budget or (
+            self.record_failures and not data["success"]
         )
         if should_record:
             frames = data_to_video(data)
             video_path = (demo_path / timestamp).with_suffix(".mp4")
             create_mp4(frames, video_path)
+            self.n_videos_saved += 1
             print(f"[env {env_idx}] Video saved at {video_path}")
 
     def __del__(self):

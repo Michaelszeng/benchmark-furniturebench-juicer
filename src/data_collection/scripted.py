@@ -27,16 +27,27 @@ if __name__ == "__main__":
         help="Suffix appended to 'scripted' in the output path (e.g. 'v2' → scripted_v2).",
     )
     parser.add_argument(
-        "--record-video",
-        type=str,
-        default=None,
-        choices=["all", "success", "failure"],
-        help="Save MP4 videos for the specified episode outcomes (all / success / failure). Omit to disable.",
+        "--n-video-trials",
+        type=int,
+        default=0,
+        help="Save videos for the first N trials (default: 0). Set to -1 to save all.",
+    )
+    parser.add_argument(
+        "--record-failures",
+        action="store_true",
+        default=False,
+        help="If set, also save videos of all failed trials beyond --n-video-trials.",
     )
     parser.add_argument(
         "--no-noise",
         action="store_true",
         help="Disable all target and action noise in the scripted policy.",
+    )
+    parser.add_argument(
+        "--dart-amount",
+        type=float,
+        default=1.0,
+        help="Scale factor for all target and action noise (1.0 = default noise, 0.0 = no noise, 2.0 = double noise).",
     )
 
     args = parser.parse_args()
@@ -75,8 +86,10 @@ if __name__ == "__main__":
         ctrl_mode="osc",
         compress_pickles=True,
         non_markovian=args.non_markovian,
-        record_video=args.record_video,
+        n_video_trials=args.n_video_trials,
+        record_failures=args.record_failures,
         no_noise=args.no_noise,
+        dart_amount=args.dart_amount,
         num_envs=args.num_envs,
     )
 

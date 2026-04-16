@@ -9,6 +9,7 @@ Usage:
         --n-action-steps 1
 """
 
+import isaacgym  # MUST be imported before torch!
 import argparse
 import collections
 import csv

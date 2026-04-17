@@ -1,5 +1,6 @@
 import gzip
 import lzma
+import os
 import pickle
 from datetime import datetime
 from io import BytesIO
@@ -79,18 +80,31 @@ def unpickle_data(pickle_path: Union[Path, str]):
 
 
 def pickle_data(data, pickle_path: Union[Path, str]):
+    """Write *data* to *pickle_path* atomically.
+
+    The payload is first serialised to a sibling ``.tmp`` file; only on
+    success is it renamed to the final path.  This guarantees that a process
+    kill or disk-full error mid-write never leaves a partial/corrupt file at
+    the intended destination.
+    """
     pickle_path = Path(pickle_path)
-    if pickle_path.suffix == ".gz":
-        with gzip.open(pickle_path, "wb") as f:
-            pickle.dump(data, f)
-    elif pickle_path.suffix == ".pkl":
-        with open(pickle_path, "wb") as f:
-            pickle.dump(data, f)
-    elif pickle_path.suffix == ".xz":
-        with lzma.open(pickle_path, "wb") as f:
-            pickle.dump(data, f)
-    else:
-        raise ValueError(f"Invalid file extension: {pickle_path.suffix}")
+    tmp_path = pickle_path.with_suffix(pickle_path.suffix + ".tmp")
+    try:
+        if pickle_path.suffix == ".gz":
+            with gzip.open(tmp_path, "wb") as f:
+                pickle.dump(data, f)
+        elif pickle_path.suffix == ".pkl":
+            with open(tmp_path, "wb") as f:
+                pickle.dump(data, f)
+        elif pickle_path.suffix == ".xz":
+            with lzma.open(tmp_path, "wb") as f:
+                pickle.dump(data, f)
+        else:
+            raise ValueError(f"Invalid file extension: {pickle_path.suffix}")
+        os.replace(tmp_path, pickle_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def create_in_memory_mp4(np_images, fps=10):

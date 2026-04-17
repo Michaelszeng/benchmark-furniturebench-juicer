@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=20
-#SBATCH --mem=200G
+#SBATCH --mem=256G
 #SBATCH --time=120:00:00
 #SBATCH --output=logs/slurm-%j.out
 #SBATCH --error=logs/slurm-%j.err
@@ -46,6 +46,15 @@ export HOME=/data/locomotion/michzeng
 # The conda activate step does not add the env's lib/ to LD_LIBRARY_PATH, so the
 # dynamic linker can't find the library unless we set it explicitly.
 export LD_LIBRARY_PATH=/data/locomotion/michzeng/mamba/envs/py38/lib:${LD_LIBRARY_PATH:-}
+
+# Enable core dumps and Python's native-signal stack printer for debugging mystery segfault crashes
+ulimit -c unlimited
+export PYTHONFAULTHANDLER=1
+echo "ulimit -c: $(ulimit -c)"
+echo "core_pattern: $(cat /proc/sys/kernel/core_pattern 2>/dev/null)"
+# NOTE: this cluster's core_pattern pipes to Ubuntu's apport, so any produced
+# core typically lands in /var/crash/<exe>.<uid>.crash rather than cwd. The
+# faulthandler trace written to the .err log is the reliable artifact here.
 
 echo "=========================================="
 

@@ -52,6 +52,7 @@ class DataCollector:
         no_noise: bool = False,
         dart_amount: float = 1.0,
         num_envs: int = 1,
+        seed: int = 0,
     ):
         """
         Args:
@@ -74,6 +75,7 @@ class DataCollector:
             n_video_trials (int): Save videos for the first N trials. Set to -1 to save all. Default 0 (no video).
             record_failures (bool): If True, also save videos of all failed trials beyond n_video_trials.
             num_envs (int): Number of parallel Isaac Gym environments. Only supported for scripted sim collection.
+            seed (int): Base random seed. Effective seed = seed + number of existing pkl files, so the same (seed, count) pair always produces the same initialization.
         """
         if is_sim:
             self.env = gym.make(
@@ -135,6 +137,7 @@ class DataCollector:
         self.n_video_trials = n_video_trials
         self.record_failures = record_failures
         self.n_videos_saved = 0
+        self.seed = seed
 
         self._reset_all_buffers()
 
@@ -158,6 +161,16 @@ class DataCollector:
         for pattern in ("*.pkl", "*.pkl.xz"):
             count += sum(1 for _ in self.data_path.rglob(pattern))
         return count
+
+    def _count_existing_demos(self) -> tuple:
+        """Return (num_success, num_fail) already saved under data_path."""
+        def _count_dir(subdir: str) -> int:
+            d = self.data_path / subdir
+            if not d.exists():
+                return 0
+            return sum(1 for p in d.iterdir() if p.suffix in (".pkl", ".xz"))
+
+        return _count_dir("success"), _count_dir("failure")
 
     def _reset_env_buffer(self, env_idx: int):
         self._bufs[env_idx] = self._make_empty_buffers()
@@ -234,8 +247,18 @@ class DataCollector:
     def collect(self):
         print("[data collection] Start collecting the data!")
 
+        # Resume from any previously saved demos in this output directory.
+        prior_success, prior_fail = self._count_existing_demos()
+        if prior_success or prior_fail:
+            print(
+                f"[data collection] Resuming: found {prior_success} existing success"
+                f" and {prior_fail} existing failure trajectories."
+            )
+        self.num_success = prior_success
+        self.num_fail = prior_fail
+
         # Full initial reset of all envs.
-        np.random.seed(self._count_pkl_files() + 1)
+        np.random.seed(self.seed + self._count_pkl_files())
         obs = self.env.reset()
         self._reset_all_buffers()
         for env_idx in range(self.num_envs):
@@ -278,7 +301,7 @@ class DataCollector:
                     self.traj_counter += 1
                     print(f"[env {env_idx}] Saved {self.traj_counter} trajectories in this run.")
 
-                    np.random.seed(self._count_pkl_files() + 1)
+                    np.random.seed(self.seed + self._count_pkl_files())
                     self._reset_single_env(env_idx)
                     self._configure_episode(env_idx)
                     self._reset_env_buffer(env_idx)

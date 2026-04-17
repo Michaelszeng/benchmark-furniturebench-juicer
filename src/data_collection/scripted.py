@@ -49,6 +49,12 @@ if __name__ == "__main__":
         default=1.0,
         help="Scale factor for all target and action noise (1.0 = default noise, 0.0 = no noise, 2.0 = double noise).",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=77,
+        help="Base random seed. Effective seed = seed + number of existing pkl files.",
+    )
 
     args = parser.parse_args()
 
@@ -91,6 +97,7 @@ if __name__ == "__main__":
         no_noise=args.no_noise,
         dart_amount=args.dart_amount,
         num_envs=args.num_envs,
+        seed=args.seed,
     )
 
     collector.collect()

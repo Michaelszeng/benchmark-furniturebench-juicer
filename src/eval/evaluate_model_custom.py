@@ -208,11 +208,6 @@ def run_rollout(
     while not done.all() and step < rollout_max_steps:
         if len(action_queue) == 0:
             obs_dict = build_obs_dict(obs_deque, device)
-            poses_flat = obs_dict["obs"]["parts_poses"].flatten().tolist()
-            print("parts_poses:")
-            for i in range(len(poses_flat) // n_obs_steps, len(poses_flat), 7):
-                row_str = ", ".join([f"{x:8.4f}" for x in poses_flat[i : i + 7]])
-                print(f"  [{row_str}]")
             result = policy.predict_action(obs_dict, use_DDIM=True)
             start = n_obs_steps - 1
             actions = result["action_pred"][:, start:]

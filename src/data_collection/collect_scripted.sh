@@ -1,10 +1,17 @@
 FURNITURE="one_leg"
 N_DEMOS=400
-DART_AMOUNT=0.75
-SUFFIX="0_75"
+# Override by passing env vars: DART_AMOUNT=0.5 SUFFIX=0_5 sbatch ...
+DART_AMOUNT=${DART_AMOUNT:-1.0}
+SUFFIX=${SUFFIX:-""}
 
 # With N_ENVS=8 on H200 node, collecting more than 1 ep/min
 N_ENVS=8
+
+echo "FURNITURE: ${FURNITURE}"
+echo "N_DEMOS: ${N_DEMOS}"
+echo "DART_AMOUNT: ${DART_AMOUNT}"
+echo "SUFFIX: ${SUFFIX}"
+echo "N_ENVS: ${N_ENVS}"
 
 if [ -n "$SUFFIX" ]; then
     # If suffix is provided, use it to create output directory suffix.

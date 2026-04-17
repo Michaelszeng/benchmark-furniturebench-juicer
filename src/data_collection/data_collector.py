@@ -91,9 +91,9 @@ class DataCollector:
                 graphics_device_id=graphics_device_id,
                 ctrl_mode=ctrl_mode,
                 no_noise=no_noise,
+                dart_amount=dart_amount,
                 corr_noise_alpha=0.8,
                 non_markovian=non_markovian,
-                dart_amount=dart_amount,
             )
         else:
             if num_envs > 1:

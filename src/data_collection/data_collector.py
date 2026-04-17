@@ -223,7 +223,6 @@ class DataCollector:
         if not self.non_markovian:
             return
         for part in self.env.furnitures[env_idx].parts:
-            part.max_len_multiplier = 2  # double every satisfy() timeout to accommodate pauses
             part.max_len_offset = getattr(part, "_NM_MAX_PAUSE", 0)
             if hasattr(part, "apply_non_markovian_config"):
                 part.apply_non_markovian_config()

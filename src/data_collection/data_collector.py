@@ -81,7 +81,13 @@ class DataCollector:
             self.env = gym.make(
                 "FurnitureSimFull-v0",
                 furniture=furniture,
-                max_env_steps=sim_config["scripted_timeout"][furniture] if scripted else 3000,
+                max_env_steps=(
+                    sim_config["nm_scripted_timeout"].get(furniture, sim_config["scripted_timeout"][furniture])
+                    if (scripted and non_markovian)
+                    else sim_config["scripted_timeout"][furniture]
+                    if scripted
+                    else 3000
+                ),
                 headless=headless,
                 num_envs=num_envs,
                 manual_done=False if scripted else True,
@@ -164,6 +170,7 @@ class DataCollector:
 
     def _count_existing_demos(self) -> tuple:
         """Return (num_success, num_fail) already saved under data_path."""
+
         def _count_dir(subdir: str) -> int:
             d = self.data_path / subdir
             if not d.exists():
@@ -390,9 +397,7 @@ class DataCollector:
             print(f"[env {env_idx}] Data saved at {pkl_path}")
 
         video_budget = self.n_video_trials if self.n_video_trials >= 0 else float("inf")
-        should_record = self.n_videos_saved < video_budget or (
-            self.record_failures and not data["success"]
-        )
+        should_record = self.n_videos_saved < video_budget or (self.record_failures and not data["success"])
         if should_record:
             frames = data_to_video(data)
             video_path = (demo_path / timestamp).with_suffix(".mp4")

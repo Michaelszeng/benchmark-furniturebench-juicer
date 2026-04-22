@@ -208,11 +208,6 @@ def run_rollout(
     while not done.all() and step < rollout_max_steps:
         if len(action_queue) == 0:
             obs_dict = build_obs_dict(obs_deque, device)
-            poses_flat = obs_dict["obs"]["parts_poses"].flatten().tolist()
-            print("parts_poses:")
-            for i in range(len(poses_flat) // n_obs_steps, len(poses_flat), 7):
-                row_str = ", ".join([f"{x:8.4f}" for x in poses_flat[i : i + 7]])
-                print(f"  [{row_str}]")
             result = policy.predict_action(obs_dict, use_DDIM=True)
             start = n_obs_steps - 1
             actions = result["action_pred"][:, start:]
@@ -312,6 +307,12 @@ if __name__ == "__main__":
         help="Override action horizon (default: use value from checkpoint config)",
     )
     parser.add_argument(
+        "--task-timeout",
+        type=int,
+        default=None,
+        help="Max rollout steps per trial (default: sim_config scripted_timeout, then task_timeout fallback)",
+    )
+    parser.add_argument(
         "--output-dir", type=str, default=None, help="Directory to write results (default: outputs/<date>/<time>)"
     )
     parser.add_argument(
@@ -340,9 +341,12 @@ if __name__ == "__main__":
     is_image_based = "color_image1" in policy_obs_keys
     print(f"Policy type: {'image-based' if is_image_based else 'state-based'} (obs keys: {sorted(policy_obs_keys)})")
 
-    # Use the same timeout that scripted data collection uses (sim_config["scripted_timeout"]),
-    # falling back to task_timeout for tasks not listed there.
-    rollout_max_steps = sim_config["scripted_timeout"].get(args.furniture, task_timeout(args.furniture))
+    if args.task_timeout is not None:
+        rollout_max_steps = args.task_timeout
+    else:
+        # Use the same timeout that scripted data collection uses (sim_config["scripted_timeout"]),
+        # falling back to task_timeout for tasks not listed there.
+        rollout_max_steps = sim_config["scripted_timeout"].get(args.furniture, task_timeout(args.furniture))
     print(f"Creating env (furniture={args.furniture}, max_steps={rollout_max_steps})")
     np.random.seed(42)
     # FurnitureSimFull-v0 mirrors the data-collection environment:

@@ -27,9 +27,14 @@ N_VIDEO_TRIALS="${5:-0}"
 N_ROLLOUTS="${6:-500}"
 DEBUG=false
 RESUME=false
-for arg in "$@"; do
-    [[ "${arg}" == "--debug" ]] && DEBUG=true
-    [[ "${arg}" == "--resume" ]] && RESUME=true
+TASK_TIMEOUT=""
+_ARGS=("$@")
+for (( i=0; i<${#_ARGS[@]}; i++ )); do
+    [[ "${_ARGS[$i]}" == "--debug" ]] && DEBUG=true
+    [[ "${_ARGS[$i]}" == "--resume" ]] && RESUME=true
+    if [[ "${_ARGS[$i]}" == "--task-timeout" ]]; then
+        TASK_TIMEOUT="${_ARGS[$((i+1))]}"
+    fi
 done
 
 # Derive experiment name from the directory before "checkpoints/".
@@ -48,6 +53,8 @@ HEADLESS_FLAG="--headless"
 [[ "${DEBUG}" == "true" ]] && HEADLESS_FLAG=""
 RESUME_FLAG=""
 [[ "${RESUME}" == "true" ]] && RESUME_FLAG="--resume"
+TASK_TIMEOUT_FLAG=""
+[[ -n "${TASK_TIMEOUT}" ]] && TASK_TIMEOUT_FLAG="--task-timeout ${TASK_TIMEOUT}"
 
 # Collect checkpoints: single file or all .ckpt files in a directory.
 if [[ -f "${CHECKPOINT_PATH}" ]]; then
@@ -85,7 +92,8 @@ for CHECKPOINT in "${CHECKPOINTS[@]}"; do
         --n-video-trials "${N_VIDEO_TRIALS}" \
         --output-dir "${OUT_DIR}" \
         ${RESUME_FLAG} \
-        ${HEADLESS_FLAG}; then
+        ${HEADLESS_FLAG} \
+        ${TASK_TIMEOUT_FLAG}; then
         echo "ERROR: evaluate_model_custom.py failed for action_horizon=${N_ACTION_STEPS}, checkpoint=${CKPT_STEM}" >&2
         continue
     fi

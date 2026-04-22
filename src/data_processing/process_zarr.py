@@ -203,6 +203,11 @@ def main():
             'e.g. "action" not "action/delta"). Default: all keys.'
         ),
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite the output zarr if it already exists.",
+    )
     args = parser.parse_args()
 
     source = pathlib.Path(args.source_zarr)
@@ -210,6 +215,9 @@ def main():
         output = pathlib.Path(args.output)
     else:
         output = source.parent / f"{source.stem}_translated.zarr"
+
+    if output.exists() and not args.overwrite:
+        raise ValueError(f"Output path already exists: {output}. Use --overwrite to overwrite.")
 
     translate(source, output, keys=args.keys)
 

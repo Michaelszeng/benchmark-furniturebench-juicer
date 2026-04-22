@@ -75,6 +75,7 @@ class CheckpointResult:
     num_trials: int
     checkpoint_dir: Path
     num_checkpoints_available: int = 1
+    all_checkpoint_trials: List[int] = field(default_factory=list)
 
 
 # -----------------------------------------------------------------------------
@@ -135,6 +136,7 @@ def collect_best_results(experiment_path: Path) -> List[CheckpointResult]:
         top = [c for c in candidates if c.num_trials == max_trials]
         best = max(top, key=lambda c: c.success_rate)
         best.num_checkpoints_available = len(candidates)
+        best.all_checkpoint_trials = [c.num_trials for c in candidates]
         results.append(best)
 
     results.sort(key=lambda r: r.horizon)
@@ -302,7 +304,11 @@ def main() -> None:
             experiments.append((label, results, palette[idx]))
             print(f"\n{label} — best checkpoint per horizon:")
             for r in results:
-                n_tag = f" [{r.num_checkpoints_available} ckpts]" if r.num_checkpoints_available > 1 else ""
+                if r.num_checkpoints_available > 1:
+                    trials_str = ", ".join(str(t) for t in r.all_checkpoint_trials)
+                    n_tag = f" [{r.num_checkpoints_available} ckpts: {trials_str} trials]"
+                else:
+                    n_tag = ""
                 print(f"  T_a_{r.horizon}: {r.success_rate:.3f} ({r.num_trials} trials) -> {r.checkpoint_dir}{n_tag}")
 
     if not experiments:

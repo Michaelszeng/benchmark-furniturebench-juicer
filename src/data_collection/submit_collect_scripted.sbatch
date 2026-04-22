@@ -14,9 +14,13 @@
 #SBATCH --requeue
 
 # Usage:
-#   sbatch src/data_collection/submit_collect_scripted.sbatch
+#   sbatch src/data_collection/submit_collect_scripted.sbatch [dart_amount [suffix]]
 #
-# SLURM runner for `collect_scripted.sh` (parameters are edited inside that shell script).
+# Arguments (both optional, positional):
+#   $1  dart_amount  — e.g. 0.125
+#   $2  suffix       — e.g. 0_125
+#
+# SLURM runner for `collect_scripted.sh`.
 
 DATE=$(date +"%Y-%m-%d")
 TIME=$(date +"%H-%M-%S")
@@ -47,6 +51,17 @@ export HOME=/data/locomotion/michzeng
 # dynamic linker can't find the library unless we set it explicitly.
 export LD_LIBRARY_PATH=/data/locomotion/michzeng/mamba/envs/py38/lib:${LD_LIBRARY_PATH:-}
 
+# Force the Vulkan loader to only see NVIDIA's ICD on this node. The system
+# has 6 ICDs installed (intel_icd, intel_hasvk, radeon, lvp/lavapipe, virtio,
+# nvidia), and enumerating all of them at instance creation has correlated
+# with sporadic SIGSEGVs deep inside IsaacGym's render_all_camera_sensors
+# on Hopper (H200) hardware. Restricting to nvidia_icd.json eliminates that
+# whole class of loader-level interactions.
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+# Also clear any default Vulkan instance layers (validation, optimus, etc.)
+# in case the cluster has any installed system-wide.
+export VK_INSTANCE_LAYERS=
+
 # Enable core dumps and Python's native-signal stack printer for debugging mystery segfault crashes
 ulimit -c unlimited
 export PYTHONFAULTHANDLER=1
@@ -58,7 +73,7 @@ echo "core_pattern: $(cat /proc/sys/kernel/core_pattern 2>/dev/null)"
 
 echo "=========================================="
 
-bash src/data_collection/collect_scripted.sh
+bash src/data_collection/collect_scripted.sh "$@"
 
 DATE_END=$(date +"%Y-%m-%d")
 TIME_END=$(date +"%H-%M-%S")

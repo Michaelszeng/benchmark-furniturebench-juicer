@@ -296,6 +296,8 @@ if __name__ == "__main__":
         )
     )
 
+    pickle_paths = [p for p in pickle_paths if p.suffix != ".tmp"]  # Ignore .tmp files which might be left over from a crashed run
+
     if args.randomize_order:
         print(f"Using random seed: {args.random_seed}")
         random.seed(args.random_seed)

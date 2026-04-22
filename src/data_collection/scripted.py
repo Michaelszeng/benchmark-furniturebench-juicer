@@ -52,7 +52,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--seed",
         type=int,
-        default=77,
+        default=75,
         help="Base random seed. Effective seed = seed + number of existing pkl files.",
     )
 

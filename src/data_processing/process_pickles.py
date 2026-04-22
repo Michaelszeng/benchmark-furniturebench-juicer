@@ -236,17 +236,19 @@ def stream_process_and_write_to_zarr(
     current_episode_end = initial_episode_end
 
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        for batch_start in tqdm(range(0, len(pickle_paths), num_threads), desc="Processing and writing files"):
-            batch_paths = pickle_paths[batch_start : batch_start + num_threads]
-            futures = [
-                executor.submit(process_pickle_file, path, noop_threshold, calculate_pos_action_from_delta)
-                for path in batch_paths
-            ]
-            for future in futures:
-                data = future.result()
-                current_episode_end = _append_episode_to_zarr(z, data, current_episode_end)
-                del data
-            del futures
+        with tqdm(total=len(pickle_paths), desc="Processing and writing files") as pbar:
+            for batch_start in range(0, len(pickle_paths), num_threads):
+                batch_paths = pickle_paths[batch_start : batch_start + num_threads]
+                futures = [
+                    executor.submit(process_pickle_file, path, noop_threshold, calculate_pos_action_from_delta)
+                    for path in batch_paths
+                ]
+                for future in futures:
+                    data = future.result()
+                    current_episode_end = _append_episode_to_zarr(z, data, current_episode_end)
+                    del data
+                del futures
+                pbar.update(len(batch_paths))
 
 
 # === Entry Point of the Script ===

@@ -154,10 +154,26 @@ def restore_physics(raw_env, snap, gripper_open_offset=0.0):
         raw_env.dof_states[finger_rows, 1] = 0.0  # zero finger velocities
 
     raw_env.isaac_gym.set_dof_state_tensor(raw_env.sim, gymtorch.unwrap_tensor(raw_env.dof_states))
+
+    # root_tensor is only refreshed via refresh_actor_root_state_tensor, which is
+    # called once at init and never again during normal simulation.  It therefore
+    # holds the last value written by a set_actor_root_state_tensor_indexed call
+    # (e.g. an assembly snap-to-position), NOT the current PhysX state.
+    # rb_states IS refreshed every step, so snap["rb_states"] is the authoritative
+    # source for furniture part positions.  Overwrite the furniture part entries in
+    # root_tensor from rb_states before calling the indexed set function.
     raw_env.root_tensor.copy_(snap["root_tensor"])
-    # Must use the indexed API to match FurnitureBench's _reset_parts.
-    # set_actor_root_state_tensor (non-indexed) silently fails to update furniture
-    # part positions in this context; the indexed variant works correctly.
+    rt_view = raw_env.root_tensor.view(raw_env.num_envs, -1, 13)
+    for part_name, rb_idxs in raw_env.part_idxs.items():
+        if part_name.startswith("obstacle"):
+            continue
+        actor_idx = raw_env.parts_handles.get(part_name)
+        if actor_idx is None:
+            continue
+        for env_idx, rb_idx in enumerate(rb_idxs):
+            # rb_states layout == root_tensor layout: [pos(3), quat(4), lin_vel(3), ang_vel(3)]
+            rt_view[env_idx, actor_idx] = snap["rb_states"][rb_idx]
+
     raw_env.isaac_gym.set_actor_root_state_tensor_indexed(
         raw_env.sim,
         gymtorch.unwrap_tensor(raw_env.root_tensor),
@@ -201,16 +217,32 @@ def restore_physics(raw_env, snap, gripper_open_offset=0.0):
 def snapshot_part_states(raw_env):
     """
     Capture per-part FSM state for all furniture environments.
-    Required in both Markovian and NM modes: _last_state drives which action
-    the scripted policy computes, and _current_speed sets the gain profile for
-    that state.  Without restoring these the FSM starts from the wrong skill
-    after rollback (as seen in the initial FAIL output).
+
+    Fields captured beyond _last_state / _current_speed:
+      gripper_action  — the gripper command (-1 open / +1 close) that the FSM
+                        last set.  Returned directly in the action tuple by
+                        pre_assemble(); if stale from the lookahead's release
+                        phase (-1), the first post-restore call outputs act_grip=-1,
+                        which sign-flips against last_grasp=+1 and physically opens
+                        the gripper.
+      pre_assemble_done — gating flag checked in get_assembly_action() to decide
+                        whether to call pre_assemble() at all.  If the lookahead
+                        completed the pre-assembly (set to True) but the restore
+                        target is mid-pre-assembly (should be False), the policy
+                        would skip the entire pre-assembly phase.
+      prev_cnt / curr_cnt — FSM step counters; elapsed = curr_cnt - prev_cnt
+                        determines when satisfy() fires.  Without restoring them
+                        the FSM transitions too early or too late.
     """
     return [
         [
             {
                 "_last_state": p._last_state,
                 "_current_speed": dict(p._current_speed),
+                "gripper_action": p.gripper_action,
+                "pre_assemble_done": p.pre_assemble_done,
+                "prev_cnt": p.prev_cnt,
+                "curr_cnt": p.curr_cnt,
             }
             for p in furn.parts
         ]
@@ -225,6 +257,10 @@ def restore_part_states(raw_env, snap):
             p = raw_env.furnitures[fi].parts[pi]
             p._last_state = ps["_last_state"]
             p._current_speed = dict(ps["_current_speed"])
+            p.gripper_action = ps["gripper_action"]
+            p.pre_assemble_done = ps["pre_assemble_done"]
+            p.prev_cnt = ps["prev_cnt"]
+            p.curr_cnt = ps["curr_cnt"]
 
 
 # ── Non-Markovian state snapshot ──────────────────────────────────────────────
@@ -347,7 +383,28 @@ def _print_ctrl_state(raw_env, label):
     print(f"    last_torque_action[:7] = {np.round(lta, 3)}")
 
 
-def run_clean_steps(env, raw_env, n_steps, label="", n_norm_steps=3):
+def _debug_part_poses(raw_env, label):
+    """Print root_tensor buffer values, rb_states positions, and FSM state for furniture parts."""
+    rt = raw_env.root_tensor.view(raw_env.num_envs, -1, 13)[0]  # (num_actors, 13)
+    print(f"  [DEBUG {label}] part_actor_idxs = {raw_env.part_actor_idxs_all_t.cpu().numpy()}")
+    for furn in raw_env.furnitures:
+        for p in furn.parts:
+            part_name = p.name
+            rb_idxs = raw_env.part_idxs.get(part_name)
+            if rb_idxs is None or part_name.startswith("obstacle"):
+                continue
+            actor_idx = raw_env.parts_handles.get(part_name)
+            rt_pos = rt[actor_idx, :3].cpu().numpy() if actor_idx is not None else "N/A"
+            rb_pos = raw_env.rb_states[rb_idxs[0], :3].cpu().numpy()
+            print(
+                f"  [DEBUG {label}] {part_name}: root_tensor={np.round(rt_pos, 4)}"
+                f"  rb_states={np.round(rb_pos, 4)}"
+                f"  fsm={p._last_state!r}  grip_act={p.gripper_action}  pre_done={p.pre_assemble_done}"
+                f"  cnt=({p.prev_cnt},{p.curr_cnt})"
+            )
+
+
+def run_clean_steps(env, raw_env, n_steps, label="", n_norm_steps=3, debug=False):
     """
     Execute up to n_steps using clean (no-noise) actions.
 
@@ -374,8 +431,17 @@ def run_clean_steps(env, raw_env, n_steps, label="", n_norm_steps=3):
         zero = torch.zeros_like(raw_env.dof_pos)
         raw_env.isaac_gym.set_dof_actuation_force_tensor(raw_env.sim, gymtorch.unwrap_tensor(zero))
     print(f"    {label}[norm] {n_norm_steps}x refresh() to settle contact cache...")
-    for _ in range(n_norm_steps):
+    for i in range(n_norm_steps):
         raw_env.refresh()
+        if debug and i == 0:
+            # After first simulate(): refresh actor root tensor to see what PhysX
+            # actually placed the actors at.  root_tensor is not normally refreshed
+            # in refresh(), so this explicit call is the only way to read it back.
+            raw_env.isaac_gym.refresh_actor_root_state_tensor(raw_env.sim)
+            print(
+                f"  [DEBUG {label}] actor root states post-norm-step-0 (from PhysX via refresh_actor_root_state_tensor):"
+            )
+            _debug_part_poses(raw_env, f"{label} post-norm")
 
     records = []
     for i in range(n_steps):
@@ -475,7 +541,7 @@ def main():
         "--checkpoints",
         type=int,
         nargs="+",
-        default=[105],
+        default=[200],
         help="Episode step indices at which to test rollback.",
     )
     parser.add_argument(
@@ -494,7 +560,7 @@ def main():
     parser.add_argument(
         "--gripper-open-offset",
         type=float,
-        default=0.01,
+        default=0.000,
         help="Metres to nudge each finger DOF open at restore time to break gripper-object contact "
         "before PhysX sees the state. Set to 0 to disable.",
     )
@@ -616,10 +682,16 @@ def main():
         print(f"  ee_pos      = {np.round(ee_pos2[0].cpu().numpy(), 4)}")
         print(f"  fsm_states  = {fsm_after}")
         _print_ctrl_state(raw_env, "restored")
+        # Debug: show what root_tensor buffer and rb_states have immediately after
+        # restore (before any simulate() is called).  root_tensor buffer = snapshot
+        # values; rb_states = still from the end of the original lookahead.
+        _debug_part_poses(raw_env, "restore (pre-norm)")
 
         # ── Restored: same clean steps ────────────────────────────────────────
         print(f"\n  → Restored: {args.lookahead} clean steps")
-        traj_rest, _ = run_clean_steps(env, raw_env, args.lookahead, label="rest", n_norm_steps=args.norm_steps)
+        traj_rest, _ = run_clean_steps(
+            env, raw_env, args.lookahead, label="rest", n_norm_steps=args.norm_steps, debug=True
+        )
 
         ok = compare_trajectories(traj_orig, traj_rest, f"rollback @ step {cp}")
         results.append((cp, ok))

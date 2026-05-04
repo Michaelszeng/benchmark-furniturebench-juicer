@@ -49,7 +49,10 @@ _N_FLUSH = 2
 # Metres to nudge each gripper finger outward during flush steps.
 # Small enough that the finger stays in contact with the part; large enough
 # that the contact compression force is reduced.
-_GRIPPER_OPEN_OFFSET = 0.00025
+_GRIPPER_OPEN_OFFSET = 0.0003
+# Skip snapshot/lookahead/restore for the first N steps (debug speedup).
+# Set to 0 to enable rollback from step 0 (production).
+_DEBUG_SKIP_STEPS = 0
 
 # ── Snapshot / restore ────────────────────────────────────────────────────────
 
@@ -267,35 +270,28 @@ def collect_episode(env, raw_env, chunk_size: int, verbose: bool = True):
         obs_np = _obs_to_numpy(obs)
         obs_small = {k: obs_np[k] for k in ["color_image1", "color_image2", "robot_state", "parts_poses"]}
 
-        # ── 2. Snapshot S_T ────────────────────────────────────────────────
-        phys_snap, part_snap = snapshot(raw_env)
+        # ── 2-4. Snapshot / lookahead / restore ───────────────────────────
+        if step >= _DEBUG_SKIP_STEPS:
+            phys_snap, part_snap = snapshot(raw_env)
 
-        # ── 3. Clean lookahead: CHUNK_SIZE steps from S_T ─────────────────
-        chunk = []
-        for _ in range(chunk_size):
-            _, ca, _ = env.get_assembly_action()
-            env.step(_scale(ca, env))
-            chunk.append(ca.detach().cpu().numpy().squeeze())
-            if done.any():  # episode ended during lookahead; pad with last action
-                while len(chunk) < chunk_size:
-                    chunk.append(chunk[-1].copy())
-                break
+            # Clean lookahead: CHUNK_SIZE steps from S_T.
+            chunk = []
+            for _ in range(chunk_size):
+                _, ca, _ = env.get_assembly_action()
+                env.step(_scale(ca, env))
+                chunk.append(ca.detach().cpu().numpy().squeeze())
+                if done.any():  # episode ended during lookahead; pad with last action
+                    while len(chunk) < chunk_size:
+                        chunk.append(chunk[-1].copy())
+                    break
 
-        # ── 4. Restore to S_T with contact-cache flush ────────────────────
-        # The clean rollout may drive the leg through insertion contact,
-        # leaving large stale impulses in the PhysX warm-start cache.
-        # Each flush pass: set correct part positions with zero velocities
-        # and the gripper fingers nudged slightly open, then call refresh()
-        # so PhysX runs simulate() and computes static-equilibrium contact
-        # forces (gripper lightly holding a stationary part) rather than
-        # the stale high-velocity insertion impulses.  Zero velocities
-        # prevent the part from drifting during the flush simulate(); the
-        # small gripper retraction lowers compression without releasing it.
-        # After all flush passes, the exact restore puts everything back.
-        for _ in range(_N_FLUSH):
-            restore(raw_env, phys_snap, part_snap, zero_part_velocities=True, gripper_open_offset=_GRIPPER_OPEN_OFFSET)
-            raw_env.refresh()
-        restore(raw_env, phys_snap, part_snap)
+            # Restore to S_T with contact-cache flush.
+            for _ in range(_N_FLUSH):
+                restore(
+                    raw_env, phys_snap, part_snap, zero_part_velocities=True, gripper_open_offset=_GRIPPER_OPEN_OFFSET
+                )
+                raw_env.refresh()
+            restore(raw_env, phys_snap, part_snap)
 
         # ── 5. Apply noisy DART step from S_T → obs_{T+1} ─────────────────
         noisy_action, clean_action, skill_complete = env.get_assembly_action()
@@ -303,6 +299,8 @@ def collect_episode(env, raw_env, chunk_size: int, verbose: bool = True):
 
         # Record clean action at T (what the policy would cleanly do from S_T).
         rec_action = _scale(clean_action, env).detach().cpu().numpy().squeeze()
+        if step < _DEBUG_SKIP_STEPS:
+            chunk = [rec_action.copy() for _ in range(chunk_size)]  # dummy
         rew_val = float(rew[0].squeeze().cpu())
         skill_val = int(skill_complete[0]) if isinstance(skill_complete, (list, tuple)) else int(skill_complete)
 
@@ -364,7 +362,7 @@ def main():
     )
 
     process_seed = uuid.uuid4().int & 0x7FFFFFFF
-    print(f"[seed] process_seed={process_seed}  (log this to reproduce any episode)")
+    print(f"[seed] process_seed={process_seed}")
 
     collector = DataCollector(
         is_sim=True,
@@ -427,7 +425,7 @@ def main():
         out_dir = data_path / subdir
         out_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
-        out_path = out_dir / f"{ts}.pkl.xz"
+        out_path = out_dir / f"{ts}_pid{os.getpid()}.pkl.xz"
         with lzma.open(out_path, "wb") as f:
             pickle.dump(data, f)
         print(f"  Saved → {out_path}")

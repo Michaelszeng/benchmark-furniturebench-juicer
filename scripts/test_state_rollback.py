@@ -125,6 +125,9 @@ def snapshot_physics(raw_env):
         "ctrl_started": raw_env.ctrl_started,
         "last_torque_action": raw_env.last_torque_action.clone() if raw_env.last_torque_action is not None else None,
         "osc_ctrls": [snapshot_osc_state(c) for c in raw_env.osc_ctrls],
+        "env_steps": raw_env.env_steps.clone(),
+        "scripted_timeout": list(raw_env.scripted_timeout),
+        "assembled_sets": [set(furn.assembled_set) for furn in raw_env.furnitures],
     }
 
 
@@ -186,6 +189,11 @@ def restore_physics(raw_env, snap, gripper_open_offset=0.0):
     raw_env.mm.copy_(snap["mm"])
     # Gripper hysteresis.
     raw_env.last_grasp.copy_(snap["last_grasp"])
+    # Step counters — lookahead steps must not count toward the timeout.
+    raw_env.env_steps.copy_(snap["env_steps"])
+    raw_env.scripted_timeout[:] = snap["scripted_timeout"]
+    for fi, furn in enumerate(raw_env.furnitures):
+        furn.assembled_set = set(snap["assembled_sets"][fi])
 
     if snap["ctrl_started"]:
         # Controller was already initialised at snapshot time: restore full state.

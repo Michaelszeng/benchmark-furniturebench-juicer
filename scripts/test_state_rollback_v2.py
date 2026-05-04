@@ -21,6 +21,7 @@ import datetime
 import lzma
 import os
 import pickle
+import uuid
 
 import numpy as np
 
@@ -48,7 +49,7 @@ _N_FLUSH = 2
 # Metres to nudge each gripper finger outward during flush steps.
 # Small enough that the finger stays in contact with the part; large enough
 # that the contact compression force is reduced.
-_GRIPPER_OPEN_OFFSET = 0.0005
+_GRIPPER_OPEN_OFFSET = 0.00025
 
 # ── Snapshot / restore ────────────────────────────────────────────────────────
 
@@ -292,9 +293,7 @@ def collect_episode(env, raw_env, chunk_size: int, verbose: bool = True):
         # small gripper retraction lowers compression without releasing it.
         # After all flush passes, the exact restore puts everything back.
         for _ in range(_N_FLUSH):
-            restore(raw_env, phys_snap, part_snap,
-                    zero_part_velocities=True,
-                    gripper_open_offset=_GRIPPER_OPEN_OFFSET)
+            restore(raw_env, phys_snap, part_snap, zero_part_velocities=True, gripper_open_offset=_GRIPPER_OPEN_OFFSET)
             raw_env.refresh()
         restore(raw_env, phys_snap, part_snap)
 
@@ -338,6 +337,14 @@ def collect_episode(env, raw_env, chunk_size: int, verbose: bool = True):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
+def _count_success(data_path) -> int:
+    """Count existing success .pkl / .pkl.xz files on disk."""
+    d = data_path / "success"
+    if not d.exists():
+        return 0
+    return sum(1 for f in d.iterdir() if f.suffix in (".pkl", ".xz"))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--furniture", "-f", type=str, required=True)
@@ -346,7 +353,6 @@ def main():
     parser.add_argument("--num-demos", "-n", type=int, default=400)
     parser.add_argument("--chunk-size", type=int, default=16)
     parser.add_argument("--dart-amount", type=float, default=1.0)
-    parser.add_argument("--seed", type=int, default=75)
     parser.add_argument("--save-failure", action="store_true")
     args = parser.parse_args()
 
@@ -356,6 +362,9 @@ def main():
         demo_source="scripted_chunk",
         randomness="low",
     )
+
+    process_seed = uuid.uuid4().int & 0x7FFFFFFF
+    print(f"[seed] process_seed={process_seed}  (log this to reproduce any episode)")
 
     collector = DataCollector(
         is_sim=True,
@@ -377,27 +386,41 @@ def main():
         no_noise=False,
         dart_amount=args.dart_amount,
         num_envs=1,
-        seed=args.seed,
+        seed=process_seed,
     )
 
     env = collector.env
     raw_env = collector.env.unwrapped
 
-    n_success = n_fail = 0
     target = args.num_demos
+    episode_idx = 0
+    n_fail = 0
 
-    while n_success < target:
-        print(f"\n[demo {n_success + n_fail}] chunk_size={args.chunk_size}  dart={args.dart_amount}")
+    while _count_success(data_path) < target:
+        on_disk = _count_success(data_path)
+        print(
+            f"\n[episode={episode_idx}  on-disk={on_disk}/{target}] chunk_size={args.chunk_size}  dart={args.dart_amount}"
+        )
+
+        episode_seed = (process_seed + episode_idx) % (2**31)
+        np.random.seed(episode_seed)
+
         data = collect_episode(env, raw_env, chunk_size=args.chunk_size)
         data["furniture"] = args.furniture
         data["chunk_size"] = args.chunk_size
+        data["process_seed"] = process_seed
+        data["episode_idx"] = episode_idx
+        episode_idx += 1
 
         if data["success"]:
-            n_success += 1
+            # Re-check before writing; another process may have filled the quota.
+            if _count_success(data_path) >= target:
+                print("  Target reached by another process — discarding episode.")
+                break
         else:
             n_fail += 1
             if not args.save_failure:
-                print(f"  Failure — skipping save ({n_success}/{target} success so far)")
+                print(f"  Failure — skipping save (on-disk={_count_success(data_path)}/{target})")
                 continue
 
         subdir = "success" if data["success"] else "failure"
@@ -408,9 +431,11 @@ def main():
         with lzma.open(out_path, "wb") as f:
             pickle.dump(data, f)
         print(f"  Saved → {out_path}")
-        print(f"  Progress: {n_success}/{target} success, {n_fail} fail")
+        print(f"  Progress: on-disk={_count_success(data_path)}/{target}, this-process failures={n_fail}")
 
-    print(f"\nDone. Collected {n_success} successful demos ({n_fail} failures).")
+    print(
+        f"\nDone. process_seed={process_seed}, episodes_run={episode_idx}, on-disk={_count_success(data_path)}/{target}."
+    )
 
 
 if __name__ == "__main__":

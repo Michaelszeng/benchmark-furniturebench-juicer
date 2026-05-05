@@ -39,20 +39,12 @@ from src.common.files import trajectory_save_dir
 from src.data_collection.data_collector import DataCollector
 from src.data_processing.utils import resize, resize_crop
 
-# ── Contact-cache flush parameters ───────────────────────────────────────────
-
-# Number of flush-restore + refresh passes before the exact restore.
-# Each pass drives a simulate() call with zero part velocities + a slightly
-# open gripper so PhysX computes static-equilibrium contact forces instead
-# of the stale high-velocity insertion impulses from the clean rollout.
-_N_FLUSH = 2
-# Metres to nudge each gripper finger outward during flush steps.
-# Small enough that the finger stays in contact with the part; large enough
-# that the contact compression force is reduced.
-_GRIPPER_OPEN_OFFSET = 0.0003
 # Skip snapshot/lookahead/restore for the first N steps (debug speedup).
 # Set to 0 to enable rollback from step 0 (production).
-_DEBUG_SKIP_STEPS = 0
+_DEBUG_SKIP_STEPS = 150
+# Terminate the episode after N steps regardless of success (debug speedup).
+# Set to 0 to disable (production).
+_DEBUG_MAX_STEPS = 235
 
 # ── Snapshot / restore ────────────────────────────────────────────────────────
 
@@ -286,12 +278,11 @@ def collect_episode(env, raw_env, chunk_size: int, verbose: bool = True):
                     break
 
             # Restore to S_T with contact-cache flush.
-            for _ in range(_N_FLUSH):
-                restore(
-                    raw_env, phys_snap, part_snap, zero_part_velocities=True, gripper_open_offset=_GRIPPER_OPEN_OFFSET
-                )
-                raw_env.refresh()
+            restore(raw_env, phys_snap, part_snap, zero_part_velocities=True, gripper_open_offset=0.001)
+            raw_env.refresh()
             restore(raw_env, phys_snap, part_snap)
+            raw_env.refresh()
+            restore(raw_env, phys_snap, part_snap)  # fix any residual position drift from conditioning step
 
         # ── 5. Apply noisy DART step from S_T → obs_{T+1} ─────────────────
         noisy_action, clean_action, skill_complete = env.get_assembly_action()
@@ -313,6 +304,11 @@ def collect_episode(env, raw_env, chunk_size: int, verbose: bool = True):
 
         if verbose and step % 50 == 0:
             print(f"  step {step:4d}  reward_sum={sum(rewards):.1f}")
+
+        if _DEBUG_MAX_STEPS and step >= _DEBUG_MAX_STEPS:
+            if verbose:
+                print(f"  [debug] stopping at step {step} (_DEBUG_MAX_STEPS={_DEBUG_MAX_STEPS})")
+            break
 
     # Store terminal obs.
     obs_np = _obs_to_numpy(obs)
@@ -389,6 +385,13 @@ def main():
 
     env = collector.env
     raw_env = collector.env.unwrapped
+
+    # # Increase velocity solver iterations so the warm-start cache converges
+    # # properly after rollbacks (default is 1, which is too few to recover from
+    # # the stale high-impulse insertion contacts left by the clean lookahead).
+    # sim_params = raw_env.isaac_gym.get_sim_params(raw_env.sim)
+    # sim_params.physx.num_velocity_iterations = 16
+    # raw_env.isaac_gym.set_sim_params(raw_env.sim, sim_params)
 
     target = args.num_demos
     episode_idx = 0

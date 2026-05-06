@@ -191,13 +191,6 @@ def restore(raw_env, phys, parts, zero_part_velocities: bool = False, gripper_op
     if phys["ctrl_started"]:
         if phys["last_torque_action"] is not None:
             raw_env.last_torque_action = phys["last_torque_action"].clone()
-            if zero_part_velocities:
-                # Zero arm torques (DOFs 0-6) so the arm doesn't accelerate
-                # during the flush simulate().  Snapshot OSC torques produce
-                # ~0.5 mm of EE displacement per substep, which biases the
-                # warm-start.  Keep gripper torques (DOFs 7-8) so the fingers
-                # still close on the part.
-                raw_env.last_torque_action[:, :7] = 0.0
             raw_env.isaac_gym.set_dof_actuation_force_tensor(
                 raw_env.sim, gymtorch.unwrap_tensor(raw_env.last_torque_action)
             )

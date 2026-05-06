@@ -126,16 +126,26 @@ def restore(raw_env, phys, parts, zero_part_velocities: bool = False, gripper_op
     """Push a snapshot back into the running simulation.
 
     zero_part_velocities: zero furniture-part lin/ang velocities in the root
-      tensor before the PhysX set call.  Causes simulate() to compute
-      static-equilibrium contact forces rather than stale insertion impulses.
+      tensor AND zero all robot DOF velocities before the PhysX set call.
+      Ensures nothing is moving during the flush simulate(), so the contact
+      solver sees a fully static scene and computes static-equilibrium grip
+      forces.  Without this, the arm's snapshot joint velocities cause relative
+      motion between the moving gripper and the stationary leg, contaminating
+      the warm-start with dynamic friction forces that shift the leg.
     gripper_open_offset: metres to add to each Franka finger DOF position
       (indices 7 and 8) before the set call.  Reduces contact compression
-      during flush steps without fully releasing the part.
-    Both flags are used together during flush passes; neither is set on the
-    final exact restore.
+      during flush steps.
+    Both flags are used during flush passes; neither is set on the final exact
+    restore.
     """
     # DOF state (robot joints + gripper).
     raw_env.dof_states.copy_(phys["dof_states"])
+    if zero_part_velocities:
+        # Zero ALL DOF velocities (arm joints + gripper, column 1) so the robot
+        # is stationary during the flush simulate().  Without this the arm moves
+        # at snapshot velocity while the leg is held still, generating wrong
+        # dynamic friction forces in the gripper-leg contact.
+        raw_env.dof_states[:, 1] = 0.0
     if gripper_open_offset:
         # Franka finger DOFs: indices 7 (left) and 8 (right) within each env.
         # num_envs=1 here, so these are simply rows 7 and 8 of dof_states.
@@ -181,6 +191,13 @@ def restore(raw_env, phys, parts, zero_part_velocities: bool = False, gripper_op
     if phys["ctrl_started"]:
         if phys["last_torque_action"] is not None:
             raw_env.last_torque_action = phys["last_torque_action"].clone()
+            if zero_part_velocities:
+                # Zero arm torques (DOFs 0-6) so the arm doesn't accelerate
+                # during the flush simulate().  Snapshot OSC torques produce
+                # ~0.5 mm of EE displacement per substep, which biases the
+                # warm-start.  Keep gripper torques (DOFs 7-8) so the fingers
+                # still close on the part.
+                raw_env.last_torque_action[:, :7] = 0.0
             raw_env.isaac_gym.set_dof_actuation_force_tensor(
                 raw_env.sim, gymtorch.unwrap_tensor(raw_env.last_torque_action)
             )

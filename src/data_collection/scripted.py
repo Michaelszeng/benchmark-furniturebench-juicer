@@ -58,6 +58,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    assert args.dart_amount == 0.0, "DART-rollback is not supported for scripted.py, use scripted_dart.py instead."
+
     # TODO: Consider what we do with images of full size and if that's needed
     # For now, we assume that images are stored in 224x224 and we know that as`image`
     # # Add the suffix _highres if we are not resizing images in or after simulation

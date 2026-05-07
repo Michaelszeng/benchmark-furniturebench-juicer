@@ -1,18 +1,18 @@
 """
-DART-rollback data collection for action-chunking policies.
+Same as scripted.py but uses DART-rollbackto collect data with DART.
 
 At each step T of a noisy (DART) trajectory:
   1. Record obs_T from the current state S_T.
   2. Snapshot S_T (physics + FSM).
-  3. Run CHUNK_SIZE clean steps from S_T → action chunk label.
-  4. Restore to S_T.
+  3. Run CHUNK_SIZE clean steps from S_T → action chunk labels.
+  4. Restore to S_T (with warm-start flush if insertion contact detected).
   5. Apply one noisy DART step → S_{T+1}, obs_{T+1}.
 
 Output: pickle per episode with noisy-trajectory observations paired with
 coherent clean action chunks.
 
 Usage:
-    conda run -n imitation-juicer python scripts/test_state_rollback_v2.py \\
+    conda run -n imitation-juicer python -m src.data_collection.scripted_dart \\
         --furniture one_leg --headless
 """
 
@@ -33,23 +33,22 @@ from isaacgym import gymtorch
 
 import torch  # noqa: F401  # isort: skip
 
+import furniture_bench.controllers.control_utils as C
 from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
 
 from src.common.files import trajectory_save_dir
 from src.data_collection.data_collector import DataCollector
 from src.data_processing.utils import resize, resize_crop
 
-# Gripper opening added to each finger DOF during the zero-velocity flush step
-# when insertion contact is detected.  Shrinks the friction cone so PGS
-# projects large insertion-phase impulses down toward zero.
+# Gripper opening added to each finger DOF during the zero-velocity flush step.
+# Shrinks the friction cone so PGS projects large insertion-phase impulses toward zero.
 _GRIPPER_OPEN_OFFSET = 0.001
+_LEG_TIP_OFFSET = 0.05625  # Leg._LEG_TIP_OFFSET: distance from mesh origin to screw tip
+_INSERTION_Z_THRESHOLD = 0.01675  # leg.py STUCK_Z_HIGH: screw tip is inside the hole
 
-# Skip snapshot/lookahead/restore for the first N steps (debug speedup).
-# Set to 0 to enable rollback from step 0 (production).
-_DEBUG_SKIP_STEPS = 150
-# Terminate the episode after N steps regardless of success (debug speedup).
-# Set to 0 to disable (production).
-_DEBUG_MAX_STEPS = None  # 235
+# Z threshold (sim world frame) at which we consider the leg to have been lifted off the table by the gripper.
+_PICK_Z_SIM = 0.45
+
 
 # ── Snapshot / restore ────────────────────────────────────────────────────────
 
@@ -100,14 +99,8 @@ def snapshot(raw_env):
         "ctrl_started": raw_env.ctrl_started,
         "last_torque_action": (raw_env.last_torque_action.clone() if raw_env.last_torque_action is not None else None),
         "osc_ctrls": [_snap_osc(c) for c in raw_env.osc_ctrls],
-        # env_steps / scripted_timeout are incremented by every env.step() call,
-        # including clean-lookahead steps.  Restore them so the timeout counter
-        # only counts noisy steps.
         "env_steps": raw_env.env_steps.clone(),
         "scripted_timeout": list(raw_env.scripted_timeout),
-        # assembled_set is updated by compute_assemble() inside every env.step().
-        # If the clean lookahead completes assembly, all_assembled() would return
-        # True on the next noisy step, terminating the episode prematurely.
         "assembled_sets": [set(furn.assembled_set) for furn in raw_env.furnitures],
     }
     parts = [
@@ -130,37 +123,20 @@ def snapshot(raw_env):
 def restore(raw_env, phys, parts, zero_velocities: bool = False, gripper_open_offset: float = 0.0):
     """Push a snapshot back into the running simulation.
 
-    zero_velocities: zero furniture-part lin/ang velocities in the root
-      tensor AND zero all robot DOF velocities before the PhysX set call.
-      Ensures nothing is moving during the flush simulate(), so the contact
-      solver sees a fully static scene and computes static-equilibrium grip
-      forces.  Without this, the arm's snapshot joint velocities cause relative
-      motion between the moving gripper and the stationary leg, contaminating
-      the warm-start with dynamic friction forces that shift the leg.
-    gripper_open_offset: metres to add to each Franka finger DOF position
-      (indices 7 and 8) before the set call.  Reduces contact compression
-      during flush steps.
-    Both flags are used during flush passes; neither is set on the final exact
-    restore.
+    zero_velocities: zero all DOF and furniture-part velocities before the PhysX
+      set call so the contact solver sees a fully static scene during the flush
+      simulate(), preventing dynamic-friction contamination of the warm-start.
+    gripper_open_offset: metres added to each finger DOF position to reduce
+      contact compression during flush steps.
     """
-    # DOF state (robot joints + gripper).
     raw_env.dof_states.copy_(phys["dof_states"])
     if zero_velocities:
-        # Zero ALL DOF velocities (arm joints + gripper, column 1) so the robot
-        # is stationary during the flush simulate().  Without this the arm moves
-        # at snapshot velocity while the leg is held still, generating wrong
-        # dynamic friction forces in the gripper-leg contact.
         raw_env.dof_states[:, 1] = 0.0
     if gripper_open_offset:
-        # Franka finger DOFs: indices 7 (left) and 8 (right) within each env.
-        # num_envs=1 here, so these are simply rows 7 and 8 of dof_states.
         raw_env.dof_states[7, 0] += gripper_open_offset
         raw_env.dof_states[8, 0] += gripper_open_offset
     raw_env.isaac_gym.set_dof_state_tensor(raw_env.sim, gymtorch.unwrap_tensor(raw_env.dof_states))
 
-    # Furniture-part root states: root_tensor is stale (only refreshed at init);
-    # rb_states is authoritative.  Overwrite root_tensor entries from rb_states
-    # before calling the indexed set function.
     raw_env.root_tensor.copy_(phys["root_tensor"])
     rt = raw_env.root_tensor.view(raw_env.num_envs, -1, 13)
     for name, rb_idxs in raw_env.part_idxs.items():
@@ -172,7 +148,7 @@ def restore(raw_env, phys, parts, zero_velocities: bool = False, gripper_open_of
         for env_idx, rb_idx in enumerate(rb_idxs):
             rt[env_idx, actor_idx] = phys["rb_states"][rb_idx]
             if zero_velocities:
-                rt[env_idx, actor_idx, 7:] = 0.0  # zero lin_vel (7:10) and ang_vel (10:13)
+                rt[env_idx, actor_idx, 7:] = 0.0
     raw_env.isaac_gym.set_actor_root_state_tensor_indexed(
         raw_env.sim,
         gymtorch.unwrap_tensor(raw_env.root_tensor),
@@ -180,19 +156,16 @@ def restore(raw_env, phys, parts, zero_velocities: bool = False, gripper_open_of
         len(raw_env.part_actor_idxs_all_t),
     )
 
-    # Derived tensors read by env.step() before the first simulate().
     raw_env.rb_states.copy_(phys["rb_states"])
     raw_env.jacobian.copy_(phys["jacobian"])
     raw_env.mm.copy_(phys["mm"])
     raw_env.last_grasp.copy_(phys["last_grasp"])
 
-    # Step counters — must match the noisy-trajectory count, not the lookahead count.
     raw_env.env_steps.copy_(phys["env_steps"])
     raw_env.scripted_timeout[:] = phys["scripted_timeout"]
     for fi, furn in enumerate(raw_env.furnitures):
         furn.assembled_set = set(phys["assembled_sets"][fi])
 
-    # Controller state.
     if phys["ctrl_started"]:
         if phys["last_torque_action"] is not None:
             raw_env.last_torque_action = phys["last_torque_action"].clone()
@@ -210,7 +183,6 @@ def restore(raw_env, phys, parts, zero_velocities: bool = False, gripper_open_of
             raw_env.sim, gymtorch.unwrap_tensor(torch.zeros_like(raw_env.dof_pos))
         )
 
-    # FSM state.
     for fi, fsnap in enumerate(parts):
         for pi, ps in enumerate(fsnap):
             p = raw_env.furnitures[fi].parts[pi]
@@ -237,7 +209,6 @@ def _scale(action, env):
 
 
 def _obs_to_numpy(obs, env_idx=0):
-    """Extract env_idx slice of a batched GPU obs dict and convert to numpy."""
     out = {}
     for k, v in obs.items():
         if isinstance(v, dict):
@@ -254,137 +225,87 @@ def _obs_to_numpy(obs, env_idx=0):
 # ── Collection loop ───────────────────────────────────────────────────────────
 
 
-def collect_episode(env, raw_env, chunk_size: int, verbose: bool = True):
-    """
-    Run one full episode with DART-rollback action-chunk labelling.
-
-    Returns a dict with:
-      observations   : list of per-step obs dicts (from the noisy trajectory)
-      action_chunks  : list of (chunk_size, action_dim) arrays — clean labels
-      actions        : list of (action_dim,) arrays — recorded clean actions at T
-      rewards        : list of floats
-      skills         : list of ints
-      success        : bool
-    """
+def collect_episode(env, raw_env, chunk_size: int):
     obs = env.reset()
     done = torch.zeros(1, dtype=torch.bool)
 
     observations, action_chunks, actions, rewards, skills = [], [], [], [], []
-    step = 0
 
-    # Pre-compute part names for insertion-contact detection via leg_tip_z_rel.
-    # Mirrors the STUCK_Z_HIGH check in leg.py: when the screw tip is within
-    # _INSERTION_Z_THRESHOLD metres of the table surface, the leg has entered
-    # the hole and the clean lookahead has contaminated the warm-start cache.
-    _LEG_TIP_OFFSET = 0.05625  # leg.py Leg._LEG_TIP_OFFSET
-    _INSERTION_Z_THRESHOLD = 0.01675  # leg.py STUCK_Z_HIGH
-    # Use skill_attach_part_idx (the active assembly leg) rather than the first
-    # leg in part_idxs — for one_leg all 5 parts are in the scene and leg1 would
-    # be found first, but leg1 is pre-assembled and fixed at a constant z.
-    _furniture = raw_env.furnitures[0]
-    _leg_name = _furniture.parts[_furniture.skill_attach_part_idx].name
-    _top_name = _furniture.parts[0].name
-    assert _leg_name in raw_env.part_idxs and _top_name in raw_env.part_idxs, (
-        f"Part names not in part_idxs: leg={_leg_name}, top={_top_name}"
-    )
-
-    import furniture_bench.controllers.control_utils as C
+    # Active leg: use skill_attach_part_idx rather than the first "leg" in
+    # part_idxs — other legs may be pre-assembled and fixed at a constant z.
+    furn = raw_env.furnitures[0]
+    leg_name = furn.parts[furn.skill_attach_part_idx].name
+    top_name = furn.parts[0].name
 
     def _leg_tip_z_rel():
-        """Screw-tip height above the table surface in robot frame (mirrors leg.py logic)."""
+        """Screw-tip height above the table surface in robot frame (mirrors leg.py)."""
         sim_to_april = raw_env.sim_to_april_mat
         april_to_robot = raw_env.april_to_robot_mat
         rb = raw_env.rb_states
         leg_pose = C.to_homogeneous(
-            rb[raw_env.part_idxs[_leg_name]][0][:3],
-            C.quat2mat(rb[raw_env.part_idxs[_leg_name]][0][3:7]),
+            rb[raw_env.part_idxs[leg_name]][0][:3],
+            C.quat2mat(rb[raw_env.part_idxs[leg_name]][0][3:7]),
         )
         leg_pose_robot = april_to_robot @ sim_to_april @ leg_pose
         top_pose = C.to_homogeneous(
-            rb[raw_env.part_idxs[_top_name]][0][:3],
-            C.quat2mat(rb[raw_env.part_idxs[_top_name]][0][3:7]),
+            rb[raw_env.part_idxs[top_name]][0][:3],
+            C.quat2mat(rb[raw_env.part_idxs[top_name]][0][3:7]),
         )
         top_pose_robot = april_to_robot @ sim_to_april @ top_pose
         leg_z_rel = leg_pose_robot[2, 3] - top_pose_robot[2, 3]
         return (leg_z_rel - leg_pose_robot[2, 1] * _LEG_TIP_OFFSET).item()
 
+    leg_has_been_picked = False
+
     while not done.any():
-        # ── 1. Record obs_T ────────────────────────────────────────────────
         obs_np = _obs_to_numpy(obs)
         obs_small = {k: obs_np[k] for k in ["color_image1", "color_image2", "robot_state", "parts_poses"]}
 
-        # ── 2-4. Snapshot / lookahead / restore ───────────────────────────
-        if step >= _DEBUG_SKIP_STEPS:
-            phys_snap, part_snap = snapshot(raw_env)
+        # Latch True once the leg rises clearly above the table; never resets
+        # within an episode.  Guards against spurious insertion-contact flushes
+        # during the reach/grasp phases when the leg is still on the table.
+        if not leg_has_been_picked:
+            leg_z = raw_env.rb_states[raw_env.part_idxs[leg_name]][0][2].item()
+            if leg_z > _PICK_Z_SIM:
+                leg_has_been_picked = True
 
-            # Clean lookahead: CHUNK_SIZE steps from S_T.
-            chunk = []
-            for _ in range(chunk_size):
-                _, ca, _ = env.get_assembly_action()
-                env.step(_scale(ca, env))
-                chunk.append(ca.detach().cpu().numpy().squeeze())
-                if done.any():  # episode ended during lookahead; pad with last action
-                    while len(chunk) < chunk_size:
-                        chunk.append(chunk[-1].copy())
-                    break
+        phys_snap, part_snap = snapshot(raw_env)
 
-            # If the lookahead drove the screw tip into the hole, the warm-start
-            # cache is contaminated with insertion-phase impulses and needs a flush.
-            post_z = _leg_tip_z_rel()
-            insertion_contact = post_z < _INSERTION_Z_THRESHOLD and step > 200
-            print("=" * 100)
-            print(
-                f"leg_tip_z_rel after lookahead: {post_z:.5f}  threshold: {_INSERTION_Z_THRESHOLD}  step: {step}  flush contact cache: {insertion_contact}"
-            )
-            print("=" * 100)
-            if insertion_contact:
-                # Warm-start is contaminated by insertion-phase impulses.
-                # Apply zero-velocity flush to reduce the wrong static-friction
-                # bias, accepting ±0.5 mm residual jitter.
-                restore(raw_env, phys_snap, part_snap, zero_velocities=True, gripper_open_offset=_GRIPPER_OPEN_OFFSET)
-                raw_env.refresh()
-                restore(raw_env, phys_snap, part_snap)
-                raw_env.refresh()
-                restore(raw_env, phys_snap, part_snap)
-            else:
-                # Warm-start from the clean rollout is already correct
-                # (centripetal forces intact).  Just do the exact restore so
-                # the noisy step inherits it without any flush-induced bias.
-                restore(raw_env, phys_snap, part_snap)
+        chunk = []
+        for _ in range(chunk_size):
+            _, ca, _ = env.get_assembly_action()
+            _, _, lookahead_done, _ = env.step(_scale(ca, env))
+            chunk.append(ca.detach().cpu().numpy().squeeze())
+            if lookahead_done.any():
+                while len(chunk) < chunk_size:
+                    chunk.append(chunk[-1].copy())
+                break
 
-        # ── 5. Apply noisy DART step from S_T → obs_{T+1} ─────────────────
+        # Flush the PhysX warm-start cache only when the lookahead drove the
+        # screw tip into the hole — otherwise the centripetal forces in the
+        # warm-start are correct and should be preserved.
+        # The leg_has_been_picked gate prevents spurious flushes before the leg is airborne.
+        if leg_has_been_picked and _leg_tip_z_rel() < _INSERTION_Z_THRESHOLD:
+            restore(raw_env, phys_snap, part_snap, zero_velocities=True, gripper_open_offset=_GRIPPER_OPEN_OFFSET)
+            raw_env.refresh()
+            restore(raw_env, phys_snap, part_snap)
+            raw_env.refresh()
+            restore(raw_env, phys_snap, part_snap)
+        else:
+            restore(raw_env, phys_snap, part_snap)
+
         noisy_action, clean_action, skill_complete = env.get_assembly_action()
-        obs, rew, done, info = env.step(_scale(noisy_action, env))
+        scaled_noisy = _scale(noisy_action, env)
+        obs, rew, done, info = env.step(scaled_noisy)
 
-        # Record clean action at T (what the policy would cleanly do from S_T).
-        rec_action = _scale(clean_action, env).detach().cpu().numpy().squeeze()
-        if step < _DEBUG_SKIP_STEPS:
-            chunk = [rec_action.copy() for _ in range(chunk_size)]  # dummy
         rew_val = float(rew[0].squeeze().cpu())
         skill_val = int(skill_complete[0]) if isinstance(skill_complete, (list, tuple)) else int(skill_complete)
 
         observations.append(obs_small)
         action_chunks.append(np.stack(chunk))
-        actions.append(rec_action)
+        actions.append(scaled_noisy.detach().cpu().numpy().squeeze())
         rewards.append(rew_val)
         skills.append(skill_val)
-        step += 1
-
-        if verbose and step % 50 == 0:
-            print(f"  step {step:4d}  reward_sum={sum(rewards):.1f}")
-
-        if _DEBUG_MAX_STEPS and step >= _DEBUG_MAX_STEPS:
-            if verbose:
-                print(f"  [debug] stopping at step {step} (_DEBUG_MAX_STEPS={_DEBUG_MAX_STEPS})")
-            break
-
-    # Store terminal obs.
-    obs_np = _obs_to_numpy(obs)
-    observations.append({k: obs_np[k] for k in ["color_image1", "color_image2", "robot_state", "parts_poses"]})
-
-    success = raw_env.furnitures[0].all_assembled()
-    if verbose:
-        print(f"  Episode done: {step} steps, success={success}, reward_sum={sum(rewards):.1f}")
 
     return {
         "observations": observations,
@@ -392,7 +313,7 @@ def collect_episode(env, raw_env, chunk_size: int, verbose: bool = True):
         "actions": actions,
         "rewards": rewards,
         "skills": skills,
-        "success": success,
+        "success": raw_env.furnitures[0].all_assembled(),
     }
 
 
@@ -400,7 +321,6 @@ def collect_episode(env, raw_env, chunk_size: int, verbose: bool = True):
 
 
 def _count_success(data_path) -> int:
-    """Count existing success .pkl / .pkl.xz files on disk."""
     d = data_path / "success"
     if not d.exists():
         return 0
@@ -410,25 +330,38 @@ def _count_success(data_path) -> int:
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--furniture", "-f", type=str, required=True)
+    parser.add_argument("--randomness", "-r", type=str, default="low")
+    parser.add_argument("--num-demos", "-n", type=int, default=100)
     parser.add_argument("--gpu-id", "-g", type=int, default=0)
-    parser.add_argument("--headless", action="store_true")
-    parser.add_argument("--num-demos", "-n", type=int, default=400)
+    parser.add_argument("--num-envs", "-e", type=int, default=1)
     parser.add_argument("--chunk-size", type=int, default=16)
     parser.add_argument("--dart-amount", type=float, default=1.0)
+    parser.add_argument("--no-noise", action="store_true")
+    parser.add_argument("--headless", action="store_true")
     parser.add_argument("--save-failure", action="store_true")
+    parser.add_argument("--non-markovian", action="store_true")
+    parser.add_argument("--output-dir-suffix", type=str, default=None)
+    parser.add_argument("--n-video-trials", type=int, default=20)
+    parser.add_argument("--record-failures", action="store_true", default=False)
+    parser.add_argument("--seed", type=int, default=None, help="Fixed process seed (default: random uuid)")
     args = parser.parse_args()
 
-    assert args.furniture == "one_leg", "Only one_leg is supported for state rollback v2"
+    suffix_parts = []
+    if args.non_markovian:
+        suffix_parts.append("non_markovian")
+    if args.output_dir_suffix:
+        suffix_parts.append(args.output_dir_suffix)
+    demo_source = "scripted" + (f"_{'_'.join(suffix_parts)}" if suffix_parts else "")
 
     data_path = trajectory_save_dir(
         environment="sim",
         task=args.furniture,
-        demo_source="scripted_chunk",
-        randomness="low",
+        demo_source=demo_source,
+        randomness=args.randomness,
     )
 
-    process_seed = uuid.uuid4().int & 0x7FFFFFFF
-    print(f"[seed] process_seed={process_seed}")
+    process_seed = args.seed if args.seed is not None else (uuid.uuid4().int & 0x7FFFFFFF)
+    print(f"[seed] process_seed={process_seed}  demo_source={demo_source}")
 
     collector = DataCollector(
         is_sim=True,
@@ -439,7 +372,7 @@ def main():
         manual_label=False,
         scripted=True,
         draw_marker=True,
-        randomness="low",
+        randomness=args.randomness,
         save_failure=args.save_failure,
         num_demos=args.num_demos,
         resize_sim_img=False,
@@ -447,34 +380,29 @@ def main():
         graphics_device_id=args.gpu_id,
         ctrl_mode="osc",
         compress_pickles=True,
-        no_noise=False,
+        non_markovian=args.non_markovian,
+        n_video_trials=args.n_video_trials,
+        record_failures=args.record_failures,
+        no_noise=args.no_noise,
         dart_amount=args.dart_amount,
-        num_envs=1,
+        num_envs=args.num_envs,
         seed=process_seed,
     )
 
     env = collector.env
     raw_env = collector.env.unwrapped
 
-    # # Increase velocity solver iterations so the warm-start cache converges
-    # # properly after rollbacks (default is 1, which is too few to recover from
-    # # the stale high-impulse insertion contacts left by the clean lookahead).
-    # sim_params = raw_env.isaac_gym.get_sim_params(raw_env.sim)
-    # sim_params.physx.num_velocity_iterations = 16
-    # raw_env.isaac_gym.set_sim_params(raw_env.sim, sim_params)
-
     target = args.num_demos
     episode_idx = 0
     n_fail = 0
 
     while _count_success(data_path) < target:
-        on_disk = _count_success(data_path)
         print(
-            f"\n[episode={episode_idx}  on-disk={on_disk}/{target}] chunk_size={args.chunk_size}  dart={args.dart_amount}"
+            f"\n[episode={episode_idx}  on-disk={_count_success(data_path)}/{target}]"
+            f"  chunk_size={args.chunk_size}  dart={args.dart_amount}"
         )
 
-        episode_seed = (process_seed + episode_idx) % (2**31)
-        np.random.seed(episode_seed)
+        np.random.seed((process_seed + episode_idx) % (2**31))
 
         data = collect_episode(env, raw_env, chunk_size=args.chunk_size)
         data["furniture"] = args.furniture
@@ -484,14 +412,13 @@ def main():
         episode_idx += 1
 
         if data["success"]:
-            # Re-check before writing; another process may have filled the quota.
             if _count_success(data_path) >= target:
-                print("  Target reached by another process — discarding episode.")
+                print("  Target reached by another process — discarding.")
                 break
         else:
             n_fail += 1
             if not args.save_failure:
-                print(f"  Failure — skipping save (on-disk={_count_success(data_path)}/{target})")
+                print(f"  Failure — skipping save  (failures={n_fail})")
                 continue
 
         subdir = "success" if data["success"] else "failure"
@@ -501,12 +428,9 @@ def main():
         out_path = out_dir / f"{ts}_pid{os.getpid()}.pkl.xz"
         with lzma.open(out_path, "wb") as f:
             pickle.dump(data, f)
-        print(f"  Saved → {out_path}")
-        print(f"  Progress: on-disk={_count_success(data_path)}/{target}, this-process failures={n_fail}")
+        print(f"  Saved → {out_path}  (on-disk={_count_success(data_path)}/{target}, failures={n_fail})")
 
-    print(
-        f"\nDone. process_seed={process_seed}, episodes_run={episode_idx}, on-disk={_count_success(data_path)}/{target}."
-    )
+    print(f"\nDone. episodes_run={episode_idx}, on-disk={_count_success(data_path)}/{target}.")
 
 
 if __name__ == "__main__":

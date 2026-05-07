@@ -151,8 +151,14 @@ def process_pickle_file(pickle_path: Path):
 
 
 _TIMESTEP_KEYS = [
-    "robot_state", "color_image1", "color_image2",
-    "action/delta", "action/chunk", "reward", "skill", "parts_poses",
+    "robot_state",
+    "color_image1",
+    "color_image2",
+    "action/delta",
+    "action/chunk",
+    "reward",
+    "skill",
+    "parts_poses",
 ]
 
 
@@ -251,7 +257,6 @@ if __name__ == "__main__":
         randomness=args.randomness,
         demo_outcome=args.demo_outcome,
     )
-    output_path = output_path.with_name(output_path.stem + "_translated" + output_path.suffix)
     print(f"Output path: {output_path}")
 
     if output_path.exists() and not args.overwrite:

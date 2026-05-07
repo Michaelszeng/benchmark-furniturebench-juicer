@@ -150,17 +150,25 @@ def process_pickle_file(pickle_path: Path):
     }
 
 
+_TIMESTEP_KEYS = [
+    "robot_state", "color_image1", "color_image2",
+    "action/delta", "action/chunk", "reward", "skill", "parts_poses",
+]
+
+
+def _check_shapes(z, data) -> List[str]:
+    """Return a list of mismatch descriptions, empty if all shapes are compatible."""
+    mismatches = []
+    for key in _TIMESTEP_KEYS:
+        expected = z[key].shape[1:]
+        actual = data[key].shape[1:]
+        if expected != actual:
+            mismatches.append(f"  {key}: zarr expects {expected}, got {actual}")
+    return mismatches
+
+
 def _append_episode_to_zarr(z, data, current_episode_end):
-    for key in [
-        "robot_state",
-        "color_image1",
-        "color_image2",
-        "action/delta",
-        "action/chunk",
-        "reward",
-        "skill",
-        "parts_poses",
-    ]:
+    for key in _TIMESTEP_KEYS:
         z[key].append(data[key])
 
     new_episode_end = current_episode_end + data["episode_length"]
@@ -175,17 +183,25 @@ def _append_episode_to_zarr(z, data, current_episode_end):
 
 def _stream_process_and_write(pickle_paths, z, num_threads, initial_episode_end=0):
     current_episode_end = initial_episode_end
+    n_skipped = 0
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
         with tqdm(total=len(pickle_paths), desc="Processing") as pbar:
             for batch_start in range(0, len(pickle_paths), num_threads):
                 batch = pickle_paths[batch_start : batch_start + num_threads]
-                futures = [executor.submit(process_pickle_file, p) for p in batch]
-                for f in futures:
+                futures = {executor.submit(process_pickle_file, p): p for p in batch}
+                for f, path in futures.items():
                     data = f.result()
-                    current_episode_end = _append_episode_to_zarr(z, data, current_episode_end)
+                    mismatches = _check_shapes(z, data)
+                    if mismatches:
+                        tqdm.write(f"  SKIPPED {path.name} — shape mismatch:\n" + "\n".join(mismatches))
+                        n_skipped += 1
+                    else:
+                        current_episode_end = _append_episode_to_zarr(z, data, current_episode_end)
                     del data
                 del futures
                 pbar.update(len(batch))
+    if n_skipped:
+        print(f"\nWarning: skipped {n_skipped} pickle(s) due to shape mismatches.")
 
 
 if __name__ == "__main__":

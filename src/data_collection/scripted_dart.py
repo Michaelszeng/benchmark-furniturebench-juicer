@@ -11,6 +11,8 @@ At each step T of a noisy (DART) trajectory:
 Output: pickle per episode with noisy-trajectory observations paired with
 coherent clean action chunks.
 
+NOTE: only compatible with --n-envs = 1
+
 Usage:
     conda run -n imitation-juicer python -m src.data_collection.scripted_dart \\
         --furniture one_leg --headless
@@ -345,6 +347,7 @@ def main():
     parser.add_argument("--record-failures", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=None, help="Fixed process seed (default: random uuid)")
     args = parser.parse_args()
+    assert args.num_envs == 1, "scripted_dart.py only supports --num-envs 1 (DART rollback is single-env only)"
 
     suffix_parts = []
     if args.non_markovian:

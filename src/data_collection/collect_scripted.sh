@@ -1,5 +1,5 @@
 FURNITURE="one_leg"
-N_DEMOS=400
+N_DEMOS=200
 
 # $1: dart_amount  $2: suffix  $3: chunk_size (scripted_dart only, default 16)  $4: non_markovian (True/False)
 DART_AMOUNT=${1:-0.0}
@@ -43,7 +43,7 @@ DEMO_SOURCE="scripted$( [ -n "${SUFFIX}" ] && echo "_${SUFFIX}" )"
 if [ "${USE_DART}" = "1" ]; then
     echo "CHUNK_SIZE: ${CHUNK_SIZE}"
     ${PY} -m src.data_collection.scripted_dart \
-        -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} \
+        -f ${FURNITURE} -n ${N_DEMOS} -e 1 \
         --chunk-size ${CHUNK_SIZE} --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG} \
         $( [ -n "${SUFFIX}" ] && echo "--output-dir-suffix ${SUFFIX}" ) \
         --headless

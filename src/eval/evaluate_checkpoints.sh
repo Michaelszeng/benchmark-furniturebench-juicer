@@ -83,7 +83,7 @@ for CHECKPOINT in "${CHECKPOINTS[@]}"; do
     echo "Checkpoint: ${CKPT_STEM}"
     echo "Action horizon: ${N_ACTION_STEPS}  ->  ${OUT_DIR}"
     echo "##########################################"
-    if ! python src/eval/evaluate_model_custom.py \
+    if ! python -u src/eval/evaluate_model_custom.py \
         --checkpoint "${CHECKPOINT}" \
         --furniture "${FURNITURE}" \
         --n-rollouts "${N_ROLLOUTS}" \

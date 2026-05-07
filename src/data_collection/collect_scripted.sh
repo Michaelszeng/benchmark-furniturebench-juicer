@@ -1,10 +1,15 @@
 FURNITURE="one_leg"
 N_DEMOS=400
 
-# $1: dart_amount, $2: suffix, $3: non_markovian (True/False)
-DART_AMOUNT=${1:-1.0}
+# $1: dart_amount  $2: suffix  $3: chunk_size (scripted_dart only, default 16)  $4: non_markovian (True/False)
+DART_AMOUNT=${1:-0.0}
 SUFFIX=${2:-""}
-NON_MARKOVIAN=${3:-"False"}
+
+# The chunk size should be equal to (or greater than) your diffusion policy's prediction horizon; it consists of the clean
+# future actions that the diffusion policy should learn to predict 
+# Default value of 16 corresponds to a policy that predicts up to 16 actions into the future
+CHUNK_SIZE=${3:-16}
+NON_MARKOVIAN=${4:-"False"}
 
 # With N_ENVS=8 on H200 node, collecting more than 1 ep/min
 N_ENVS=8
@@ -32,34 +37,33 @@ if [ "${NON_MARKOVIAN}" = "True" ]; then
     fi
 fi
 
-if [ -n "$SUFFIX" ]; then
-    # If suffix is provided, use it to create output directory suffix.
-    ${PY} src/data_collection/scripted.py -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} --n-video-trials 20 --output-dir-suffix ${SUFFIX} --headless --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG}
-    ${PY} src/data_processing/process_pickles.py -f ${FURNITURE} -s "scripted_${SUFFIX}" -e "sim" --overwrite
-    ${PY} src/data_processing/process_zarr.py dataset/processed/sim/${FURNITURE}/scripted_${SUFFIX}/low/success.zarr --output dataset/processed/sim/${FURNITURE}/scripted_${SUFFIX}/low/success_translated.zarr --overwrite
+# Route to scripted_dart.py when DART_AMOUNT > 0, scripted.py otherwise.
+USE_DART=$(echo "${DART_AMOUNT} > 0" | bc -l)
+DEMO_SOURCE="scripted$( [ -n "${SUFFIX}" ] && echo "_${SUFFIX}" )"
+
+if [ "${USE_DART}" = "1" ]; then
+    echo "CHUNK_SIZE: ${CHUNK_SIZE}"
+    ${PY} -m src.data_collection.scripted_dart \
+        -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} \
+        --chunk-size ${CHUNK_SIZE} --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG} \
+        $( [ -n "${SUFFIX}" ] && echo "--output-dir-suffix ${SUFFIX}" ) \
+        --headless
 else
-    # Else, use default output directory suffix.
-    ${PY} src/data_collection/scripted.py -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} --n-video-trials 20 --headless --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG}
-    ${PY} src/data_processing/process_pickles.py -f ${FURNITURE} -s "scripted" -e "sim" --overwrite
-    ${PY} src/data_processing/process_zarr.py dataset/processed/sim/${FURNITURE}/scripted/low/success.zarr --output dataset/processed/sim/${FURNITURE}/scripted/low/success_translated.zarr --overwrite
+    ${PY} src/data_collection/scripted.py \
+        -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} \
+        --n-video-trials 20 --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG} \
+        $( [ -n "${SUFFIX}" ] && echo "--output-dir-suffix ${SUFFIX}" ) \
+        --headless
 fi
 
+# Process the pickles and convert to zarr
+PROCESS_PICKLES=$( [ "${USE_DART}" = "1" ] \
+    && echo "src/data_processing/process_pickles_dart.py" \
+    || echo "src/data_processing/process_pickles.py" )
+${PY} ${PROCESS_PICKLES} -f ${FURNITURE} -s "${DEMO_SOURCE}" -e "sim" --overwrite
 
-###
-# Run Scripted Policy (to generate `.pkl.xz` files) (`N` is the number of successful demos to record):
-# ```bash
-# python src/data_collection/scripted.py -f "FURNITURE" -n N --n-video-trials 0 --record-failures
-# ```
-
-# Convert `.pkl.xz` to `.zarr`:
-# ```bash
-# python src/data_processing/process_pickles.py -f "FURNITURE" -s "scripted" -e "sim"
-# ```
-
-#### Convert to Training Format
-
-# Convert `zarr` to diffusion policy format (`<source_zarr_name>_translated/zarr`):
-# ```bash
-# python src/data_processing/process_zarr.py PATH.zarr --output PATH_translated.zarr
-# ```
-###
+# Translate Zarr format for diffusion policy
+${PY} src/data_processing/process_zarr.py \
+    dataset/processed/sim/${FURNITURE}/${DEMO_SOURCE}/low/success.zarr \
+    --output dataset/processed/sim/${FURNITURE}/${DEMO_SOURCE}/low/success_translated.zarr \
+    --overwrite

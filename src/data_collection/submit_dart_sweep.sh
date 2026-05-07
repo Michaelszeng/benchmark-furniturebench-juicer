@@ -1,6 +1,8 @@
 #!/bin/bash
 # Submit collect_scripted.sbatch for multiple dart_amount values.
 
+NON_MARKOVIAN="True"
+
 declare -A DART_SUFFIXES=(
     ["0.0"]="0"
     # ["0.03125"]="0_03125"
@@ -13,9 +15,9 @@ declare -A DART_SUFFIXES=(
 
 for DART_AMOUNT in "${!DART_SUFFIXES[@]}"; do
     SUFFIX="${DART_SUFFIXES[$DART_AMOUNT]}"
-    echo "Submitting dart_amount=${DART_AMOUNT} (suffix=${SUFFIX})"
+    echo "Submitting dart_amount=${DART_AMOUNT} (suffix=${SUFFIX}) non_markovian=${NON_MARKOVIAN}"
     sbatch src/data_collection/submit_collect_scripted.sbatch \
-        "${DART_AMOUNT}" "${SUFFIX}"
+        "${DART_AMOUNT}" "${SUFFIX}" "${NON_MARKOVIAN}"
 done
 
 # Usage:

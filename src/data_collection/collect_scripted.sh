@@ -10,7 +10,6 @@ SUFFIX=${2:-""}
 # Default value of 16 corresponds to a policy that predicts up to 16 actions into the future
 CHUNK_SIZE=${3:-16}
 
-# With N_ENVS=8 on H200 node, collecting more than 1 ep/min
 N_ENVS=8
 
 echo "FURNITURE: ${FURNITURE}"
@@ -44,14 +43,39 @@ else
         --headless
 fi
 
-# Process the pickles and convert to zarr
+# Post-processing: convert pickles → zarr → translated zarr.
+# Multiple instances of this script may run in parallel (separate SLURM jobs),
+# all writing to the same output directory.  Only one instance should run
+# post-processing.  We use an atomic mkdir lock + a done-marker file so that
+# exactly the first instance to finish collection runs it; all others skip.
+#
+# If post-processing crashes and leaves a stale lock, delete the lock dir:
+#   rm -rf "${LOCK_DIR}"
 PROCESS_PICKLES=$( [ "${USE_DART}" = "1" ] \
     && echo "src/data_processing/process_pickles_dart.py" \
     || echo "src/data_processing/process_pickles.py" )
-${PY} ${PROCESS_PICKLES} -f ${FURNITURE} -s "${DEMO_SOURCE}" -e "sim" --overwrite
 
-# Translate Zarr format for diffusion policy
-${PY} src/data_processing/process_zarr.py \
-    dataset/processed/sim/${FURNITURE}/${DEMO_SOURCE}/low/success.zarr \
-    --output dataset/processed/sim/${FURNITURE}/${DEMO_SOURCE}/low/success_translated.zarr \
-    --overwrite
+RAW_SUCCESS_DIR="dataset/raw/sim/${FURNITURE}/${DEMO_SOURCE}/low/success"
+DONE_FILE="${RAW_SUCCESS_DIR}/.post_process_done"
+LOCK_DIR="${RAW_SUCCESS_DIR}/.post_process_lock"
+
+if [ -f "${DONE_FILE}" ]; then
+    echo "[post-process] Already completed by another instance — skipping."
+elif mkdir "${LOCK_DIR}" 2>/dev/null; then
+    # Acquired the lock.  Double-check the done marker in case another instance
+    # completed between our file-existence check and the mkdir.
+    if [ ! -f "${DONE_FILE}" ]; then
+        echo "[post-process] Lock acquired — running post-processing."
+        ${PY} ${PROCESS_PICKLES} -f ${FURNITURE} -s "${DEMO_SOURCE}" -e "sim" --overwrite \
+            && ${PY} src/data_processing/process_zarr.py \
+                dataset/processed/sim/${FURNITURE}/${DEMO_SOURCE}/low/success.zarr \
+                --output dataset/processed/sim/${FURNITURE}/${DEMO_SOURCE}/low/success_translated.zarr \
+                --overwrite \
+            && touch "${DONE_FILE}"
+    else
+        echo "[post-process] Already completed by another instance (inside lock) — skipping."
+    fi
+    rmdir "${LOCK_DIR}"
+else
+    echo "[post-process] Another instance holds the lock — skipping."
+fi

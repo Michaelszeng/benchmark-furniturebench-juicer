@@ -1,9 +1,10 @@
 FURNITURE="one_leg"
 N_DEMOS=400
 
-# $1: dart_amount, $2: suffix
+# $1: dart_amount, $2: suffix, $3: non_markovian (True/False)
 DART_AMOUNT=${1:-1.0}
 SUFFIX=${2:-""}
+NON_MARKOVIAN=${3:-"False"}
 
 # With N_ENVS=8 on H200 node, collecting more than 1 ep/min
 N_ENVS=8
@@ -13,6 +14,7 @@ echo "N_DEMOS: ${N_DEMOS}"
 echo "DART_AMOUNT: ${DART_AMOUNT}"
 echo "SUFFIX: ${SUFFIX}"
 echo "N_ENVS: ${N_ENVS}"
+echo "NON_MARKOVIAN: ${NON_MARKOVIAN}"
 
 # `stdbuf -oL -eL` line-buffers stdout/stderr of the child process and `python -u`
 # disables Python's own output buffering. Together, these ensure that any
@@ -20,14 +22,24 @@ echo "N_ENVS: ${N_ENVS}"
 # .out / .err files instead of being lost in a flushed-at-exit buffer.
 PY="stdbuf -oL -eL python -u"
 
+NON_MARKOVIAN_FLAG=""
+if [ "${NON_MARKOVIAN}" = "True" ]; then
+    NON_MARKOVIAN_FLAG="--non-markovian"
+    if [ -n "$SUFFIX" ]; then
+        SUFFIX="${SUFFIX}_non_markovian"
+    else
+        SUFFIX="non_markovian"
+    fi
+fi
+
 if [ -n "$SUFFIX" ]; then
     # If suffix is provided, use it to create output directory suffix.
-    ${PY} src/data_collection/scripted.py -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} --n-video-trials 20 --output-dir-suffix ${SUFFIX} --headless --dart-amount ${DART_AMOUNT}
+    ${PY} src/data_collection/scripted.py -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} --n-video-trials 20 --output-dir-suffix ${SUFFIX} --headless --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG}
     ${PY} src/data_processing/process_pickles.py -f ${FURNITURE} -s "scripted_${SUFFIX}" -e "sim" --overwrite
     ${PY} src/data_processing/process_zarr.py dataset/processed/sim/${FURNITURE}/scripted_${SUFFIX}/low/success.zarr --output dataset/processed/sim/${FURNITURE}/scripted_${SUFFIX}/low/success_translated.zarr --overwrite
 else
     # Else, use default output directory suffix.
-    ${PY} src/data_collection/scripted.py -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} --n-video-trials 20 --headless --dart-amount ${DART_AMOUNT}
+    ${PY} src/data_collection/scripted.py -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} --n-video-trials 20 --headless --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG}
     ${PY} src/data_processing/process_pickles.py -f ${FURNITURE} -s "scripted" -e "sim" --overwrite
     ${PY} src/data_processing/process_zarr.py dataset/processed/sim/${FURNITURE}/scripted/low/success.zarr --output dataset/processed/sim/${FURNITURE}/scripted/low/success_translated.zarr --overwrite
 fi

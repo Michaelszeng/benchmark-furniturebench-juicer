@@ -65,12 +65,7 @@ if __name__ == "__main__":
     #     obs_type = obs_type + "_highres"
     resize_sim_img = False
 
-    suffix_parts = []
-    if args.non_markovian:
-        suffix_parts.append("non_markovian")
-    if args.output_dir_suffix:
-        suffix_parts.append(args.output_dir_suffix)
-    demo_source = "scripted" + (f"_{'_'.join(suffix_parts)}" if suffix_parts else "")
+    demo_source = "scripted" + (f"_{args.output_dir_suffix}" if args.output_dir_suffix else "")
 
     data_path = trajectory_save_dir(
         environment="sim",

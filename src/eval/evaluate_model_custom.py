@@ -98,7 +98,7 @@ def load_policy(checkpoint_path: str, device: torch.device):
     import hydra  # import here to avoid hydra global-init side-effects
     from diffusion_policy.workspace.base_workspace import BaseWorkspace  # noqa
 
-    payload = torch.load(open(checkpoint_path, "rb"), pickle_module=dill)
+    payload = torch.load(open(checkpoint_path, "rb"), pickle_module=dill, map_location="cpu")
     cfg = payload["cfg"]
 
     cls = hydra.utils.get_class(cfg._target_)
@@ -114,7 +114,7 @@ def load_policy(checkpoint_path: str, device: torch.device):
     normalizer_path = ckpt_path.parent.parent / "normalizer.pt"
     if normalizer_path.exists():
         print(f"Loading normalizer from {normalizer_path}")
-        normalizer = torch.load(normalizer_path)
+        normalizer = torch.load(normalizer_path, map_location="cpu")
     else:
         print(f"Normalizer not found at {normalizer_path}, generating from dataset…")
         dataset = hydra.utils.instantiate(cfg.task.dataset)
@@ -216,7 +216,20 @@ def run_rollout(
                 action_queue.append(actions[:, t, :])
 
         action = action_queue.popleft()
-        obs, reward, done, _ = env.step(action)
+        try:
+            obs, reward, done, _ = env.step(action)
+        except RuntimeError as e:
+            # The IsaacGym OSC controller can fail (e.g. singular mass matrix)
+            # when the robot reaches a pathological configuration. Abort this
+            # rollout and mark still-running envs as failures so the outer
+            # evaluation loop can continue with the next checkpoint / round.
+            print(
+                f"[run_rollout] env.step raised RuntimeError at step {step}: {e}. "
+                "Marking unfinished envs as failures and ending rollout."
+            )
+            done_step[done_step == -1] = step
+            done = torch.ones_like(done)
+            break
         total_reward += reward.squeeze(-1).float()
 
         # Record when each env finishes for the first time.
@@ -327,6 +340,15 @@ if __name__ == "__main__":
         parser.error("--resume requires --output-dir to be specified")
 
     device = torch.device(args.device)
+
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            f"No CUDA GPUs are available (device={args.device}, "
+            f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')}). "
+            "If running under SLURM, conda activate may have cleared CUDA_VISIBLE_DEVICES. "
+            "Add 'export CUDA_VISIBLE_DEVICES=\"${CUDA_VISIBLE_DEVICES:-0}\"' "
+            "after the conda activate line in your SLURM script."
+        )
 
     print(f"Loading policy from {args.checkpoint}")
     policy, cfg = load_policy(args.checkpoint, device)

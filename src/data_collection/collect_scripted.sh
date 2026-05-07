@@ -1,7 +1,7 @@
 FURNITURE="one_leg"
 N_DEMOS=400
 
-# $1: dart_amount  $2: suffix  $3: chunk_size (scripted_dart only, default 16)
+# $1: dart_amount  $2: suffix  $3: chunk_size (scripted_dart only, default 16)  $4: non_markovian (True/False)
 DART_AMOUNT=${1:-0.0}
 SUFFIX=${2:-""}
 
@@ -9,6 +9,7 @@ SUFFIX=${2:-""}
 # future actions that the diffusion policy should learn to predict 
 # Default value of 16 corresponds to a policy that predicts up to 16 actions into the future
 CHUNK_SIZE=${3:-16}
+NON_MARKOVIAN=${4:-"False"}
 
 N_ENVS=8
 
@@ -16,8 +17,8 @@ echo "FURNITURE: ${FURNITURE}"
 echo "N_DEMOS: ${N_DEMOS}"
 echo "DART_AMOUNT: ${DART_AMOUNT}"
 echo "SUFFIX: ${SUFFIX}"
-echo "CHUNK_SIZE: ${CHUNK_SIZE}"
 echo "N_ENVS: ${N_ENVS}"
+echo "NON_MARKOVIAN: ${NON_MARKOVIAN}"
 
 # `stdbuf -oL -eL` line-buffers stdout/stderr of the child process and `python -u`
 # disables Python's own output buffering. Together, these ensure that any
@@ -25,20 +26,31 @@ echo "N_ENVS: ${N_ENVS}"
 # .out / .err files instead of being lost in a flushed-at-exit buffer.
 PY="stdbuf -oL -eL python -u"
 
+NON_MARKOVIAN_FLAG=""
+if [ "${NON_MARKOVIAN}" = "True" ]; then
+    NON_MARKOVIAN_FLAG="--non-markovian"
+    if [ -n "$SUFFIX" ]; then
+        SUFFIX="${SUFFIX}_non_markovian"
+    else
+        SUFFIX="non_markovian"
+    fi
+fi
+
 # Route to scripted_dart.py when DART_AMOUNT > 0, scripted.py otherwise.
 USE_DART=$(echo "${DART_AMOUNT} > 0" | bc -l)
 DEMO_SOURCE="scripted$( [ -n "${SUFFIX}" ] && echo "_${SUFFIX}" )"
 
 if [ "${USE_DART}" = "1" ]; then
+    echo "CHUNK_SIZE: ${CHUNK_SIZE}"
     ${PY} -m src.data_collection.scripted_dart \
         -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} \
-        --chunk-size ${CHUNK_SIZE} --dart-amount ${DART_AMOUNT} \
+        --chunk-size ${CHUNK_SIZE} --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG} \
         $( [ -n "${SUFFIX}" ] && echo "--output-dir-suffix ${SUFFIX}" ) \
         --headless
 else
     ${PY} src/data_collection/scripted.py \
         -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} \
-        --n-video-trials 20 --dart-amount ${DART_AMOUNT} \
+        --n-video-trials 20 --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG} \
         $( [ -n "${SUFFIX}" ] && echo "--output-dir-suffix ${SUFFIX}" ) \
         --headless
 fi

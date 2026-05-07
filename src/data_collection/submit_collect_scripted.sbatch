@@ -8,17 +8,18 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=20
 #SBATCH --mem=256G
-#SBATCH --time=120:00:00
+#SBATCH --time=60:00:00
 #SBATCH --output=logs/slurm-%j.out
 #SBATCH --error=logs/slurm-%j.err
 #SBATCH --requeue
 
 # Usage:
-#   sbatch src/data_collection/submit_collect_scripted.sbatch [dart_amount [suffix]]
+#   sbatch src/data_collection/submit_collect_scripted.sbatch [dart_amount [suffix [non_markovian]]]
 #
-# Arguments (both optional, positional):
-#   $1  dart_amount  — e.g. 0.125
-#   $2  suffix       — e.g. 0_125
+# Arguments (all optional, positional):
+#   $1  dart_amount    — e.g. 0.125
+#   $2  suffix         — e.g. 0_125
+#   $3  non_markovian  — True or False (default: False)
 #
 # SLURM runner for `collect_scripted.sh`.
 

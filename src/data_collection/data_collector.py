@@ -68,7 +68,7 @@ class DataCollector:
             compute_device_id (int): GPU device ID used for simulation.
             graphics_device_id (int): GPU device ID used for rendering.
             save_failure (bool): Whether to save failure trajectories.
-            num_demos (int): The maximum number of demonstrations to collect in this run. Internal loop will be terminated when this number is reached.
+            num_demos (int): Target total number of demonstrations on disk. The collection loop terminates (and skips saves) once the output directory contains this many pkl files, counting contributions from all parallel jobs.
             resize_sim_img (bool): Read resized image.
             ctrl_mode (str): 'osc' (joint torque, with operation space control) or 'diffik' (joint impedance, with differential inverse kinematics control).
             compress_pickles (bool): Whether to compress the pickle files with gzip.
@@ -175,7 +175,10 @@ class DataCollector:
             d = self.data_path / subdir
             if not d.exists():
                 return 0
-            return sum(1 for p in d.iterdir() if p.suffix in (".pkl", ".xz"))
+            # Count completed files (.pkl, .pkl.xz) and in-progress writes
+            # (.pkl.tmp, .pkl.xz.tmp) so that slots claimed by parallel jobs
+            # mid-write are treated as occupied.
+            return sum(1 for p in d.iterdir() if p.suffix in (".pkl", ".xz", ".tmp"))
 
         return _count_dir("success"), _count_dir("failure")
 
@@ -254,15 +257,21 @@ class DataCollector:
     def collect(self):
         print("[data collection] Start collecting the data!")
 
-        # Resume from any previously saved demos in this output directory.
+        # Report any demos already present in the output directory (written by
+        # other parallel jobs or a previous interrupted run).  The local
+        # num_success / num_fail counters track only what THIS job saves; all
+        # termination decisions use num_saved_on_disk() so that every parallel
+        # instance sees the shared total and stops as soon as the quota is met.
         prior_success, prior_fail = self._count_existing_demos()
         if prior_success or prior_fail:
             print(
-                f"[data collection] Resuming: found {prior_success} existing success"
-                f" and {prior_fail} existing failure trajectories."
+                f"[data collection] Found {prior_success} existing success"
+                f" and {prior_fail} existing failure trajectories on disk."
             )
-        self.num_success = prior_success
-        self.num_fail = prior_fail
+
+        def num_saved_on_disk() -> int:
+            s, f = self._count_existing_demos()
+            return s + (f if self.save_failure else 0)
 
         # Full initial reset of all envs.
         np.random.seed(self.seed + self._count_pkl_files())
@@ -273,16 +282,15 @@ class DataCollector:
 
         done = torch.zeros(self.num_envs, dtype=torch.bool)
 
-        def num_saved():
-            return self.num_success + (self.num_fail if self.save_failure else 0)
-
-        while num_saved() < self.num_demos:
+        while num_saved_on_disk() < self.num_demos:
             # --- Handle envs that finished in the previous step ---
             if done.any():
                 for env_idx in range(self.num_envs):
                     if not done[env_idx]:
                         continue
-                    if num_saved() >= self.num_demos:
+                    # Re-read disk count: another parallel job may have filled
+                    # the quota since the top-of-loop check.
+                    if num_saved_on_disk() >= self.num_demos:
                         continue
 
                     # obs[env_idx] is the terminal obs from the previous env.step().
@@ -292,21 +300,35 @@ class DataCollector:
                     collect_enum = CollectEnum.SUCCESS if success else CollectEnum.FAIL
 
                     if success:
-                        self.save(env_idx, collect_enum, {})
-                        self.num_success += 1
-                        print(f"[env {env_idx}] SUCCESS — Success: {self.num_success}, Fail: {self.num_fail}")
+                        # Check again immediately before writing to minimise the
+                        # race window when multiple jobs finish near-simultaneously.
+                        if num_saved_on_disk() < self.num_demos:
+                            self.save(env_idx, collect_enum, {})
+                            self.num_success += 1
+                        else:
+                            print(f"[env {env_idx}] SUCCESS — quota reached, skipping save.")
+                        print(
+                            f"[env {env_idx}] SUCCESS — this run: success={self.num_success},"
+                            f" fail={self.num_fail}; total on disk: {num_saved_on_disk()}/{self.num_demos}"
+                        )
                     else:
                         if self.save_failure:
-                            print(f"[env {env_idx}] Saving failure trajectory.")
-                            self.save(env_idx, collect_enum, {})
+                            if num_saved_on_disk() < self.num_demos:
+                                print(f"[env {env_idx}] Saving failure trajectory.")
+                                self.save(env_idx, collect_enum, {})
+                            else:
+                                print(f"[env {env_idx}] FAIL — quota reached, skipping save.")
                         else:
                             print(f"[env {env_idx}] Failed to assemble — saving video only, not pickle.")
                             self.save(env_idx, collect_enum, {}, save_pickle=False)
                         self.num_fail += 1
-                        print(f"[env {env_idx}] FAIL   — Success: {self.num_success}, Fail: {self.num_fail}")
+                        print(
+                            f"[env {env_idx}] FAIL   — this run: success={self.num_success},"
+                            f" fail={self.num_fail}; total on disk: {num_saved_on_disk()}/{self.num_demos}"
+                        )
 
                     self.traj_counter += 1
-                    print(f"[env {env_idx}] Saved {self.traj_counter} trajectories in this run.")
+                    print(f"[env {env_idx}] Processed {self.traj_counter} episodes in this run.")
 
                     np.random.seed(self.seed + self._count_pkl_files())
                     self._reset_single_env(env_idx)
@@ -317,7 +339,7 @@ class DataCollector:
                 obs = self.env.unwrapped._get_observation()
                 done = torch.zeros(self.num_envs, dtype=torch.bool)
 
-                if num_saved() >= self.num_demos:
+                if num_saved_on_disk() >= self.num_demos:
                     break
 
             # --- Compute actions for all envs ---
@@ -355,8 +377,8 @@ class DataCollector:
 
         kind = "total" if self.save_failure else "successful"
         print(
-            f"Collected {num_saved()} / {self.num_demos} {kind} trajectories"
-            f" (success={self.num_success}, fail={self.num_fail})!"
+            f"Quota reached: {num_saved_on_disk()} / {self.num_demos} {kind} trajectories on disk."
+            f" This run contributed: success={self.num_success}, fail={self.num_fail}."
         )
 
     # ------------------------------------------------------------------

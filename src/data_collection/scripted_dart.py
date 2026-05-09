@@ -41,6 +41,7 @@ from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
 from src.common.files import trajectory_save_dir
 from src.data_collection.data_collector import DataCollector
 from src.data_processing.utils import resize, resize_crop
+from src.visualization.render_mp4 import create_mp4, data_to_video
 
 # Gripper opening added to each finger DOF during the zero-velocity flush step.
 # Shrinks the friction cone so PGS projects large insertion-phase impulses toward zero.
@@ -343,7 +344,7 @@ def main():
     parser.add_argument("--save-failure", action="store_true")
     parser.add_argument("--non-markovian", action="store_true")
     parser.add_argument("--output-dir-suffix", type=str, default=None)
-    parser.add_argument("--n-video-trials", type=int, default=20)
+    parser.add_argument("--n-video-trials", type=int, default=0)
     parser.add_argument("--record-failures", action="store_true", default=False)
     parser.add_argument("--seed", type=int, default=None, help="Fixed process seed (default: random uuid)")
     args = parser.parse_args()
@@ -396,6 +397,8 @@ def main():
     target = args.num_demos
     episode_idx = 0
     n_fail = 0
+    n_videos_saved = 0
+    video_budget = args.n_video_trials if args.n_video_trials >= 0 else float("inf")
 
     while _count_success(data_path) < target:
         print(
@@ -430,6 +433,14 @@ def main():
         with lzma.open(out_path, "wb") as f:
             pickle.dump(data, f)
         print(f"  Saved → {out_path}  (on-disk={_count_success(data_path)}/{target}, failures={n_fail})")
+
+        should_record = n_videos_saved < video_budget or (args.record_failures and not data["success"])
+        if should_record:
+            frames = data_to_video(data)
+            video_path = (out_dir / f"{ts}_pid{os.getpid()}").with_suffix(".mp4")
+            create_mp4(frames, video_path)
+            n_videos_saved += 1
+            print(f"  Video → {video_path}")
 
     print(f"\nDone. episodes_run={episode_idx}, on-disk={_count_success(data_path)}/{target}.")
 

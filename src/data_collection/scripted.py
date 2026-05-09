@@ -1,5 +1,6 @@
 import argparse
 import os
+import uuid
 
 if "DATA_DIR_RAW" not in os.environ:
     os.environ["DATA_DIR_RAW"] = "dataset"
@@ -52,13 +53,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--seed",
         type=int,
-        default=75,
-        help="Base random seed. Effective seed = seed + number of existing pkl files.",
+        default=None,
+        help="Fixed process seed (default: random uuid-derived value).",
     )
 
     args = parser.parse_args()
 
     assert args.dart_amount == 0.0, "DART-rollback is not supported for scripted.py, use scripted_dart.py instead."
+
+    process_seed = args.seed if args.seed is not None else (uuid.uuid4().int & 0x7FFFFFFF)
+    print(f"[seed] process_seed={process_seed}")
 
     # TODO: Consider what we do with images of full size and if that's needed
     # For now, we assume that images are stored in 224x224 and we know that as`image`
@@ -101,7 +105,7 @@ if __name__ == "__main__":
         no_noise=args.no_noise,
         dart_amount=args.dart_amount,
         num_envs=args.num_envs,
-        seed=args.seed,
+        seed=process_seed,
     )
 
     collector.collect()

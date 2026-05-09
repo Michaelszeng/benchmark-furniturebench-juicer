@@ -19,6 +19,7 @@ Usage:
 """
 
 import argparse
+import copy
 import datetime
 import lzma
 import os
@@ -114,11 +115,27 @@ def snapshot(raw_env):
                 "pre_assemble_done": p.pre_assemble_done,
                 "prev_cnt": p.prev_cnt,
                 "curr_cnt": p.curr_cnt,
+                # All nm_* / _nm_* instance attributes (NM policy state + prev_leg_tip_z_rel).
+                # Using vars() captures only instance attrs, not class methods.
+                "nm_attrs": {
+                    k: copy.deepcopy(v)
+                    for k, v in vars(p).items()
+                    if k.startswith("nm_") or k.startswith("_nm_") or k in ("prev_leg_tip_z_rel", "prev_leg_z_vel_robot")
+                },
             }
             for p in furn.parts
         ]
         for furn in raw_env.furnitures
     ]
+    # NM virtual-target state lives on raw_env (one entry per env).
+    phys["nm_vt"] = {
+        "_nm_vt_pos": copy.deepcopy(raw_env._nm_vt_pos),
+        "_nm_vt_vel": copy.deepcopy(raw_env._nm_vt_vel),
+        "_nm_vt_ori": copy.deepcopy(raw_env._nm_vt_ori),
+        "_nm_vt_ang_vel": copy.deepcopy(raw_env._nm_vt_ang_vel),
+        "_nm_vt_falloff_dist": list(raw_env._nm_vt_falloff_dist),
+        "_nm_vt_falloff_angle": list(raw_env._nm_vt_falloff_angle),
+    }
     return phys, parts
 
 
@@ -194,6 +211,17 @@ def restore(raw_env, phys, parts, zero_velocities: bool = False, gripper_open_of
             p.pre_assemble_done = ps["pre_assemble_done"]
             p.prev_cnt = ps["prev_cnt"]
             p.curr_cnt = ps["curr_cnt"]
+            for k, v in ps["nm_attrs"].items():
+                setattr(p, k, copy.deepcopy(v))
+
+    # NM virtual-target state.
+    nm = phys["nm_vt"]
+    raw_env._nm_vt_pos = copy.deepcopy(nm["_nm_vt_pos"])
+    raw_env._nm_vt_vel = copy.deepcopy(nm["_nm_vt_vel"])
+    raw_env._nm_vt_ori = copy.deepcopy(nm["_nm_vt_ori"])
+    raw_env._nm_vt_ang_vel = copy.deepcopy(nm["_nm_vt_ang_vel"])
+    raw_env._nm_vt_falloff_dist = list(nm["_nm_vt_falloff_dist"])
+    raw_env._nm_vt_falloff_angle = list(nm["_nm_vt_falloff_angle"])
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

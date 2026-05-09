@@ -350,8 +350,6 @@ def main():
     assert args.num_envs == 1, "scripted_dart.py only supports --num-envs 1 (DART rollback is single-env only)"
 
     suffix_parts = []
-    if args.non_markovian:
-        suffix_parts.append("non_markovian")
     if args.output_dir_suffix:
         suffix_parts.append(args.output_dir_suffix)
     demo_source = "scripted" + (f"_{'_'.join(suffix_parts)}" if suffix_parts else "")

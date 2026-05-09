@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=evaluate_checkpoints
 #SBATCH --account=locomotion
-#SBATCH --partition=vision-shared-titanrtx
-#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,oliva-titanrtx-3
+#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1
 #SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -60,6 +60,7 @@ echo "ACTION_HORIZON: $ACTION_HORIZON"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_0_25_200_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_0_5_200_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_0_75_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_1_0_200_eps/checkpoints"
 
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_0_400_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_0_03125_400_eps/checkpoints"
@@ -68,6 +69,7 @@ echo "ACTION_HORIZON: $ACTION_HORIZON"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_0_25_400_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_0_5_400_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_0_75_400_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_1_0_400_eps/checkpoints"
 
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_non_markovian_dart_0_200_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_non_markovian_dart_0_25_200_eps/checkpoints"
@@ -75,9 +77,12 @@ echo "ACTION_HORIZON: $ACTION_HORIZON"
 
 
 TASK_TIMEOUT=""  # Leave empty to use sim_config["scripted_timeout"] / task_timeout fallback.
-# Auto-set TASK_TIMEOUT to 900 for teleop / non-markovian checkpoints (longer episodes).
-if [[ "${CHECKPOINT_PATH}" == *"teleop"* || "${CHECKPOINT_PATH}" == *"non_markovian"* ]]; then
+# Auto-set TASK_TIMEOUT for teleop / non-markovian checkpoints (longer episodes).
+if [[ "${CHECKPOINT_PATH}" == *"teleop"* ]]; then
     TASK_TIMEOUT=900
+fi
+if [[ "${CHECKPOINT_PATH}" == *"non_markovian"* ]]; then
+    TASK_TIMEOUT=850
 fi
 
 

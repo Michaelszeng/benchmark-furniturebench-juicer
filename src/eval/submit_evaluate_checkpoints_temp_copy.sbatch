@@ -2,7 +2,7 @@
 #SBATCH --job-name=evaluate_checkpoints
 #SBATCH --account=locomotion
 #SBATCH --partition=vision-shared-titanrtx
-#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,oliva-titanrtx-3
+#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1
 #SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1

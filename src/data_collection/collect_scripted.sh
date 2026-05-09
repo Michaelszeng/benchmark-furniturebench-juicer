@@ -13,6 +13,8 @@ NON_MARKOVIAN=${4:-"False"}
 
 N_ENVS=8
 
+# SUFFIX=""  # manual override
+
 echo "FURNITURE: ${FURNITURE}"
 echo "N_DEMOS: ${N_DEMOS}"
 echo "DART_AMOUNT: ${DART_AMOUNT}"
@@ -38,6 +40,7 @@ fi
 
 # Route to scripted_dart.py when DART_AMOUNT > 0, scripted.py otherwise.
 USE_DART=$(echo "${DART_AMOUNT} > 0" | bc -l)
+# USE_DART=1  # TEMP: always use scripted_dart
 DEMO_SOURCE="scripted$( [ -n "${SUFFIX}" ] && echo "_${SUFFIX}" )"
 
 if [ "${USE_DART}" = "1" ]; then

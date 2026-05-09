@@ -14,12 +14,13 @@
 #SBATCH --requeue
 
 # Usage:
-#   sbatch src/data_collection/submit_collect_scripted.sbatch [dart_amount [suffix [non_markovian]]]
+#   sbatch src/data_collection/submit_collect_scripted.sbatch [dart_amount [suffix [chunk_size [non_markovian]]]]
 #
 # Arguments (all optional, positional):
 #   $1  dart_amount    — e.g. 0.125
 #   $2  suffix         — e.g. 0_125
-#   $3  non_markovian  — True or False (default: False)
+#   $3  chunk_size     — e.g. 16 (default: 16; scripted_dart only)
+#   $4  non_markovian  — True or False (default: False)
 #
 # SLURM runner for `collect_scripted.sh`.
 

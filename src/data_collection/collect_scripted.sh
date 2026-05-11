@@ -1,7 +1,12 @@
 FURNITURE="one_leg"
 N_DEMOS=200
 
-# $1: dart_amount  $2: suffix  $3: chunk_size (scripted_dart only, default 16)  $4: non_markovian (True/False)
+# $1: dart_amount
+# $2: suffix
+# $3: chunk_size (scripted_dart only, default 16)
+# $4: non_markovian (True/False)
+# $5: use_dart (True/False) — selects which collection
+# + post-processing scripts to run, independent of DART_AMOUNT.
 DART_AMOUNT=${1:-0.0}
 SUFFIX=${2:-""}
 
@@ -10,6 +15,7 @@ SUFFIX=${2:-""}
 # Default value of 16 corresponds to a policy that predicts up to 16 actions into the future
 CHUNK_SIZE=${3:-16}
 NON_MARKOVIAN=${4:-"False"}
+USE_DART=${5:-"False"}
 
 N_ENVS=8
 
@@ -21,6 +27,7 @@ echo "DART_AMOUNT: ${DART_AMOUNT}"
 echo "SUFFIX: ${SUFFIX}"
 echo "N_ENVS: ${N_ENVS}"
 echo "NON_MARKOVIAN: ${NON_MARKOVIAN}"
+echo "USE_DART: ${USE_DART}"
 
 # `stdbuf -oL -eL` line-buffers stdout/stderr of the child process and `python -u`
 # disables Python's own output buffering. Together, these ensure that any
@@ -38,13 +45,13 @@ if [ "${NON_MARKOVIAN}" = "True" ]; then
     fi
 fi
 
-# Route to scripted_dart.py when DART_AMOUNT > 0, scripted.py otherwise.
-USE_DART=$(echo "${DART_AMOUNT} > 0" | bc -l)
-# USE_DART=1  # TEMP: always use scripted_dart
+# Route to scripted_dart.py vs scripted.py based on the hard-coded USE_DART flag
+# (independent of DART_AMOUNT — set explicitly by the caller).
 DEMO_SOURCE="scripted$( [ -n "${SUFFIX}" ] && echo "_${SUFFIX}" )"
 
-if [ "${USE_DART}" = "1" ]; then
+if [ "${USE_DART}" = "True" ]; then
     echo "CHUNK_SIZE: ${CHUNK_SIZE}"
+    # Use 1 env if using scripted_dart -- scripted_dart only supports 1 env
     ${PY} -m src.data_collection.scripted_dart \
         -f ${FURNITURE} -n ${N_DEMOS} -e 1 \
         --chunk-size ${CHUNK_SIZE} --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG} \
@@ -66,7 +73,7 @@ fi
 #
 # If post-processing crashes and leaves a stale lock, delete the lock dir:
 #   rm -rf "${LOCK_DIR}"
-PROCESS_PICKLES=$( [ "${USE_DART}" = "1" ] \
+PROCESS_PICKLES=$( [ "${USE_DART}" = "True" ] \
     && echo "src/data_processing/process_pickles_dart.py" \
     || echo "src/data_processing/process_pickles.py" )
 

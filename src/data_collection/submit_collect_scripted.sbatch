@@ -1,26 +1,29 @@
 #!/bin/bash
 #SBATCH --job-name=collect_scripted
 #SBATCH --account=locomotion
-#SBATCH --partition=locomotion-h200
-#SBATCH --qos=locomotion-main
+#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1
+#SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
-#SBATCH --cpus-per-task=20
-#SBATCH --mem=256G
-#SBATCH --time=60:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=32G
+#SBATCH --time=24:00:00
 #SBATCH --output=logs/slurm-%j.out
 #SBATCH --error=logs/slurm-%j.err
 #SBATCH --requeue
 
 # Usage:
-#   sbatch src/data_collection/submit_collect_scripted.sbatch [dart_amount [suffix [chunk_size [non_markovian]]]]
+#   sbatch src/data_collection/submit_collect_scripted.sbatch [dart_amount [suffix [chunk_size [non_markovian [use_dart]]]]]
 #
 # Arguments (all optional, positional):
 #   $1  dart_amount    — e.g. 0.125
 #   $2  suffix         — e.g. 0_125
 #   $3  chunk_size     — e.g. 16 (default: 16; scripted_dart only)
 #   $4  non_markovian  — True or False (default: False)
+#   $5  use_dart       — True or False (default: False); selects scripted_dart.py +
+#                        process_pickles_dart.py vs scripted.py + process_pickles.py
 #
 # SLURM runner for `collect_scripted.sh`.
 

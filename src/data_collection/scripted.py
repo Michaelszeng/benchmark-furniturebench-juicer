@@ -59,10 +59,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.dart_amount == 0.0:
-        print("*" * 60 + "\n*" * 60 + "\n*" * 60)
+    if args.dart_amount != 0.0:
+        print("*" * 60)
         print("DART-rollback is not supported for scripted.py, use scripted_dart.py instead.")
-        print("*" * 60 + "\n*" * 60 + "\n*" * 60)
+        print("*" * 60)
 
     process_seed = args.seed if args.seed is not None else (uuid.uuid4().int & 0x7FFFFFFF)
     print(f"[seed] process_seed={process_seed}")

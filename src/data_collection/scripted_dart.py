@@ -302,25 +302,11 @@ def collect_episode(env, raw_env, chunk_size: int):
 
         phys_snap, part_snap = snapshot(raw_env)
 
-        # Clean lookahead.  After the first step we capture the VT state so
-        # that the noisy step can be forced onto the clean VT trajectory.
         chunk = []
-        clean_vt_next = None
-        for i in range(chunk_size):
+        for _ in range(chunk_size):
             _, ca, _ = env.get_assembly_action()
             _, _, lookahead_done, _ = env.step(_scale(ca, env))
             chunk.append(ca.detach().cpu().numpy().squeeze())
-            if i == 0:
-                # VT has now been updated by one clean action from S_T.
-                # Save it so the noisy step inherits the clean VT trajectory.
-                clean_vt_next = {
-                    "_nm_vt_pos":           copy.deepcopy(raw_env._nm_vt_pos),
-                    "_nm_vt_vel":           copy.deepcopy(raw_env._nm_vt_vel),
-                    "_nm_vt_ori":           copy.deepcopy(raw_env._nm_vt_ori),
-                    "_nm_vt_ang_vel":       copy.deepcopy(raw_env._nm_vt_ang_vel),
-                    "_nm_vt_falloff_dist":  list(raw_env._nm_vt_falloff_dist),
-                    "_nm_vt_falloff_angle": list(raw_env._nm_vt_falloff_angle),
-                }
             if lookahead_done.any():
                 while len(chunk) < chunk_size:
                     chunk.append(chunk[-1].copy())
@@ -342,21 +328,6 @@ def collect_episode(env, raw_env, chunk_size: int):
         noisy_action, clean_action, skill_complete = env.get_assembly_action()
         scaled_noisy = _scale(noisy_action, env)
         obs, rew, done, info = env.step(scaled_noisy)
-
-        # Override the VT with the clean-action-updated state so it tracks the
-        # intended clean trajectory rather than the noisy DART trajectory.
-        # The get_assembly_action() call above updated the VT using the noisy
-        # EE position; that update is discarded here.  This ensures the VT
-        # accumulates clean momentum across the episode and is invariant to
-        # DART level, removing the spurious oscillations caused by noisy VT
-        # history leaking into the chunk labels.
-        if clean_vt_next is not None:
-            raw_env._nm_vt_pos           = copy.deepcopy(clean_vt_next["_nm_vt_pos"])
-            raw_env._nm_vt_vel           = copy.deepcopy(clean_vt_next["_nm_vt_vel"])
-            raw_env._nm_vt_ori           = copy.deepcopy(clean_vt_next["_nm_vt_ori"])
-            raw_env._nm_vt_ang_vel       = copy.deepcopy(clean_vt_next["_nm_vt_ang_vel"])
-            raw_env._nm_vt_falloff_dist  = list(clean_vt_next["_nm_vt_falloff_dist"])
-            raw_env._nm_vt_falloff_angle = list(clean_vt_next["_nm_vt_falloff_angle"])
 
         rew_val = float(rew[0].squeeze().cpu())
         skill_val = int(skill_complete[0]) if isinstance(skill_complete, (list, tuple)) else int(skill_complete)

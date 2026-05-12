@@ -252,9 +252,9 @@ def main():
     ax_axes.legend(fontsize=7)
 
     plt.tight_layout()
-    out_path = "scripts/nm_virtual_target_viz.png"
-    plt.savefig(out_path, dpi=150, bbox_inches="tight")
-    print(f"Saved → {out_path}")
+    # out_path = "scripts/nm_virtual_target_viz.png"
+    # plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    # print(f"Saved → {out_path}")
     plt.show()
 
 

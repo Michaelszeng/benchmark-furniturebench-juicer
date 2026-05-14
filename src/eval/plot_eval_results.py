@@ -297,6 +297,12 @@ def main() -> None:
     else:
         palette = [NAVY] if len(exp_paths) == 1 else _generate_color_palette(len(exp_paths))
         for idx, (exp_path, label) in enumerate(zip(exp_paths, exp_labels)):
+            if not exp_path.exists():
+                print(f"\n{'!'*60}")
+                print(f"WARNING: experiment path does not exist, skipping:")
+                print(f"  {exp_path}")
+                print(f"{'!'*60}")
+                continue
             results = collect_best_results(exp_path)
             if not results:
                 print(f"Warning: no valid results.pkl files found under {exp_path}. Skipping.")

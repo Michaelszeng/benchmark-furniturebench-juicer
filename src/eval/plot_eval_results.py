@@ -1,5 +1,5 @@
 """
-Plot success rates across action horizons from evaluate_checkpoints.sh output.
+Plot success rates across Execution Horizons from evaluate_checkpoints.sh output.
 
 Scans an output directory with the structure:
     <experiment_path>/T_a_<horizon>/<checkpoint_stem>/results.pkl
@@ -220,9 +220,9 @@ def make_plot(
         ax.set_xticks(all_horizons)
         ax.set_xticklabels([str(h) for h in all_horizons])
 
-    title = plot_name or ("Action Horizon Comparison" if len(experiments) > 1 else experiments[0][0])
+    title = plot_name or ("Execution Horizon Comparison" if len(experiments) > 1 else experiments[0][0])
     ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
-    ax.set_xlabel("Action Horizon (steps)", fontsize=12)
+    ax.set_xlabel("Execution Horizon (steps)", fontsize=12)
     ax.set_ylabel("Success Rate", fontsize=12)
 
     ax.grid(True, which="major", color=GRID_COLOR, linestyle="-", linewidth=0.8, alpha=0.6)
@@ -250,7 +250,7 @@ def make_plot(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Plot success rates across action horizons from evaluate_checkpoints.sh output."
+        description="Plot success rates across Execution Horizons from evaluate_checkpoints.sh output."
     )
     parser.add_argument("--experiment-path", type=Path, nargs="+", required=True,
                         help="Path(s) to experiment output directories containing T_a_<N> sub-folders.")

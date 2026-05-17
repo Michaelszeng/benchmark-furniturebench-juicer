@@ -50,9 +50,9 @@ echo "ACTION_HORIZON: $ACTION_HORIZON"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/20_obs_one_leg_teleop_r3m_double_enc/checkpoints"
 
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_teleop_r3m_cross_attn_double_enc_scripted_non_markovian_1000_eps/checkpoints"
-CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/4_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/4_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/8_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
-# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/12_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
+CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/12_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/16_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/20_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
 
@@ -71,7 +71,7 @@ CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/out
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_0_125_200_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_0_25_200_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_0_5_200_eps/checkpoints"
-CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_1_0_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_1_0_200_eps/checkpoints"
 
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_non_markovian_dart_0_200_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_non_markovian_dart_0_0625_200_eps/checkpoints"
@@ -91,7 +91,7 @@ fi
 
 
 FURNITURE="one_leg"
-N_ENVS=32
+N_ENVS=8
 N_ROLLOUTS=500
 N_VIDEO_TRIALS=20
 # ============================================================================
@@ -127,6 +127,16 @@ export HOME=/data/locomotion/michzeng
 # The conda activate step does not add the env's lib/ to LD_LIBRARY_PATH, so the
 # dynamic linker can't find the library unless we set it explicitly.
 export LD_LIBRARY_PATH=/data/locomotion/michzeng/mamba/envs/py38/lib:${LD_LIBRARY_PATH:-}
+
+# IsaacGym's `gymtorch` is JIT-loaded via torch.utils.cpp_extension.load(), which
+# guards the shared build dir with a FileBaton lock file. If a process is killed
+# (OOM, TIME-OUT, scancel) while holding the baton, the lock file is left behind
+# and every subsequent job that imports IsaacGym hangs forever polling for it to
+# disappear. Give each SLURM job its own build dir so jobs cannot deadlock each
+# other through the shared cache.
+export TORCH_EXTENSIONS_DIR="${TMPDIR:-/tmp}/torch_extensions_${SLURM_JOB_ID}_py38_cu121"
+mkdir -p "${TORCH_EXTENSIONS_DIR}"
+echo "TORCH_EXTENSIONS_DIR: ${TORCH_EXTENSIONS_DIR}"
 
 echo "CHECKPOINT_PATH: $CHECKPOINT_PATH"
 echo "FURNITURE:       $FURNITURE"

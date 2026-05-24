@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=collect_scripted
 #SBATCH --account=locomotion
-#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --partition=vision-shared-titanrtx
 #SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1
 #SBATCH --qos=shared-if-available
 #SBATCH --nodes=1

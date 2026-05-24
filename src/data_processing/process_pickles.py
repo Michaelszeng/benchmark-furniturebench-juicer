@@ -17,6 +17,16 @@ Usage:
     python -m src.data_processing.process_pickles \\
         --env sim --furniture one_leg --source scripted \\
         --randomness low --demo-outcome success [--overwrite] [--n-cpus 8]
+
+The --source flag accepts multiple values and shell-glob patterns, so multiple
+directories of pickle files can be aggregated into a single zarr in one run:
+
+    --source dagger_iter0/correction dagger_iter1/correction
+    --source 'dagger_iter*/correction'   # auto-expanded via glob
+
+When sources contain a `/` or a wildcard, pass --output-name to give the
+output zarr a clean filename (otherwise it's auto-derived by sanitising the
+joined source list).
 """
 
 import argparse
@@ -262,6 +272,12 @@ if __name__ == "__main__":
         type=str,
         default=None,
         nargs="+",
+        help=(
+            "Demo source directory name(s) to include. Accepts shell glob wildcards "
+            "(*, ?, [...]) and path separators, e.g. 'teleop', 'dagger_iter0', "
+            "or 'dagger_iter*/correction'. When wildcards or slashes are present, "
+            "you must also pass --output-name to give the output zarr a clean name."
+        ),
     )
     parser.add_argument(
         "--randomness",
@@ -284,6 +300,16 @@ if __name__ == "__main__":
     parser.add_argument("--randomize-order", action="store_true")
     parser.add_argument("--random-seed", type=int, default=0)
     parser.add_argument("--n-cpus", type=int, default=1)
+    parser.add_argument(
+        "--output-name",
+        type=str,
+        default=None,
+        help=(
+            "Override the demo_source segment of the output zarr path. Useful when --source "
+            "contains slashes or wildcards (which would otherwise produce a messy zarr name). "
+            "Example: --source 'dagger_iter*/correction' --output-name dagger_combined"
+        ),
+    )
     args = parser.parse_args()
 
     pickle_paths: List[Path] = sorted(
@@ -298,7 +324,9 @@ if __name__ == "__main__":
         )
     )
 
-    pickle_paths = [p for p in pickle_paths if p.suffix != ".tmp"]  # Ignore .tmp files which might be left over from a crashed run
+    pickle_paths = [
+        p for p in pickle_paths if p.suffix != ".tmp"
+    ]  # Ignore .tmp files which might be left over from a crashed run
 
     if args.randomize_order:
         print(f"Using random seed: {args.random_seed}")
@@ -310,10 +338,25 @@ if __name__ == "__main__":
 
     print(f"Found {len(pickle_paths)} pickle files")
 
+    # Derive the demo_source segment of the output zarr path. --source may contain
+    # shell wildcards (`*`, `?`) and slashes (e.g. "dagger_iter*/correction") which
+    # the get_raw_paths glob handles natively for INPUT, but would corrupt the
+    # OUTPUT filename. Sanitise here, or use --output-name when provided.
+    if args.output_name is not None:
+        output_demo_source = args.output_name
+    else:
+        sanitised = [s.replace("/", "_") for s in (args.source or [])]
+        if any(any(ch in s for ch in "*?[") for s in sanitised):
+            raise ValueError(
+                "--source contains a shell wildcard; pass --output-name to give the output zarr a clean name. "
+                f"Got: {args.source}"
+            )
+        output_demo_source = sanitised
+
     output_path = get_processed_path(
         environment=args.env,
         task=args.furniture,
-        demo_source=args.source,
+        demo_source=output_demo_source,
         randomness=args.randomness,
         demo_outcome=args.demo_outcome,
     )

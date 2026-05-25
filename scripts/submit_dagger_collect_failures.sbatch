@@ -1,0 +1,97 @@
+#!/bin/bash
+#SBATCH --job-name=dagger_failures
+#SBATCH --account=locomotion
+#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1
+#SBATCH --qos=shared-if-available
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=32G
+#SBATCH --time=24:00:00
+#SBATCH --output=logs/slurm-%j.out
+#SBATCH --error=logs/slurm-%j.err
+#SBATCH --requeue
+
+# Usage:
+#   sbatch scripts/submit_dagger_collect_failures.sbatch <iter> <action_horizon> <non_markovian>
+#
+# Multi-instance parallel submission:
+#   bash scripts/launch_dagger_collect_failures.sh <num_procs> <iter> <action_horizon> <non_markovian>
+#
+# After ALL parallel instances finish collecting, the LAST one to reach the
+# barrier acquires a lock and runs dagger_render_failures.py (collect_scripted.sh
+# pattern). Once that's done, run dagger_label_gates.py manually, then submit
+# submit_dagger_collect_corrections.sbatch for the same iter.
+
+# === CONSTANTS (edit before running) ====================================
+CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_1_0_200_eps/checkpoints/MODEL.ckpt"
+
+FURNITURE="one_leg"
+NUM_FAILURES=20
+# ========================================================================
+
+ITER="${1:?Usage: sbatch ... <iter> <action_horizon> <non_markovian> [instance_idx total_instances]}"
+ACTION_HORIZON="${2:?missing action_horizon}"
+NON_MARKOVIAN="${3:?missing non_markovian (true/false)}"
+INSTANCE_IDX="${4:-0}"
+TOTAL_INSTANCES="${5:-1}"
+
+echo "$(date +'%F %T')  job=$SLURM_JOB_ID  host=$HOSTNAME"
+echo "ITER=$ITER  ACTION_HORIZON=$ACTION_HORIZON  NON_MARKOVIAN=$NON_MARKOVIAN"
+echo "INSTANCE_IDX=$INSTANCE_IDX  TOTAL_INSTANCES=$TOTAL_INSTANCES"
+echo "CHECKPOINT=$CHECKPOINT"
+echo "FURNITURE=$FURNITURE  NUM_FAILURES=$NUM_FAILURES"
+
+# --- Environment setup ---
+cd "$SLURM_SUBMIT_DIR" || { echo "cd failed"; exit 1; }
+source /data/locomotion/michzeng/miniconda3/etc/profile.d/conda.sh
+conda activate py38
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${SLURM_STEP_GPUS:-${SLURM_JOB_GPUS:-0}}}"
+mkdir -p logs
+export PYTHONPATH=$PWD:$PYTHONPATH
+export PHYSX_MAX_GPU_CONTACT_PAIRS=$((1024 * 1024 * 32))
+export HOME=/data/locomotion/michzeng
+export LD_LIBRARY_PATH=/data/locomotion/michzeng/mamba/envs/py38/lib:${LD_LIBRARY_PATH:-}
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+export VK_INSTANCE_LAYERS=
+ulimit -c unlimited
+export PYTHONFAULTHANDLER=1
+
+NM_ARG=()
+case "${NON_MARKOVIAN,,}" in true|1|yes) NM_ARG=(--non-markovian) ;; esac
+
+FAILURE_DIR="dataset/raw/sim/${FURNITURE}/dagger_iter${ITER}/low/failure"
+
+echo "==== [1/2] dagger_collect_failures.py ===="
+python scripts/dagger_collect_failures.py \
+    --checkpoint "$CHECKPOINT" \
+    --furniture "$FURNITURE" \
+    --iter "$ITER" \
+    --num-failures "$NUM_FAILURES" \
+    --n-action-steps "$ACTION_HORIZON" \
+    --headless \
+    "${NM_ARG[@]}"
+
+# --- Barrier + lock: only the last instance runs render. -----------------
+# Each instance writes a unique marker on completion; the one that observes
+# all markers and wins the mkdir lock runs render. Race-free even for single-
+# instance runs (TOTAL_INSTANCES=1 → first marker == last → run render).
+# Render failures into mp4s for human gating.
+DONE_DIR="${FAILURE_DIR}/.collect_done"
+LOCK_DIR="${FAILURE_DIR}/.render_lock"
+mkdir -p "$DONE_DIR"
+touch "${DONE_DIR}/${SLURM_JOB_ID:-$$}"
+N_DONE=$(ls "$DONE_DIR" 2>/dev/null | wc -l)
+echo "barrier: ${N_DONE}/${TOTAL_INSTANCES} instances finished"
+
+if [ "$N_DONE" -ge "$TOTAL_INSTANCES" ] && mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "==== [2/2] dagger_render_failures.py (last instance, lock acquired) ===="
+    python scripts/dagger_render_failures.py "$FAILURE_DIR"
+    rm -rf "$DONE_DIR" "$LOCK_DIR"
+    echo "done. Next: label gates, then submit submit_dagger_collect_corrections.sbatch."
+else
+    echo "skipping render (not the last instance, or lost lock race)"
+fi
+echo "$(date +'%F %T')  finished"

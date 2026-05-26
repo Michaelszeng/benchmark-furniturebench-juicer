@@ -298,8 +298,8 @@ def snapshot_nm_state(raw_env):
         "_nm_vt_falloff_dist": list(raw_env._nm_vt_falloff_dist),
         "_nm_vt_falloff_angle": list(raw_env._nm_vt_falloff_angle),
         # Per-step temporally-correlated noise state
-        "_corr_noise_state": {
-            k: {"pos": v["pos"].clone(), "aa": v["aa"].copy()} for k, v in raw_env._corr_noise_state.items()
+        "_nm_corr_noise_state": {
+            k: {"pos": v["pos"].clone(), "aa": v["aa"].copy()} for k, v in raw_env._nm_corr_noise_state.items()
         },
         # Per-furniture part NM-specific FSM state (_last_state handled by snapshot_part_states)
         "furnitures": [
@@ -334,9 +334,9 @@ def restore_nm_state(raw_env, snap):
         raw_env._nm_vt_ang_vel[i] = x.copy()
     raw_env._nm_vt_falloff_dist[:] = snap["_nm_vt_falloff_dist"]
     raw_env._nm_vt_falloff_angle[:] = snap["_nm_vt_falloff_angle"]
-    raw_env._corr_noise_state.clear()
-    for k, v in snap["_corr_noise_state"].items():
-        raw_env._corr_noise_state[k] = {"pos": v["pos"].clone(), "aa": v["aa"].copy()}
+    raw_env._nm_corr_noise_state.clear()
+    for k, v in snap["_nm_corr_noise_state"].items():
+        raw_env._nm_corr_noise_state[k] = {"pos": v["pos"].clone(), "aa": v["aa"].copy()}
     for fi, fs in enumerate(snap["furnitures"]):
         for pi, ps in enumerate(fs["parts"]):
             p = raw_env.furnitures[fi].parts[pi]

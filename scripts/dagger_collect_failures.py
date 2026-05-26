@@ -104,32 +104,6 @@ def _claim_failure_number(failure_dir, tail: str):
 
 # ── Snapshot ──────────────────────────────────────────────────────────────────
 
-# Fields on `Part` / its subclasses that are set once at __init__ (or as class
-# attributes) and never re-bound per-episode. Anything NOT in this set is
-# treated as mutable per-episode state and gets snapshotted reflectively, so
-# new fields added by future refactors (e.g. more `nm_*` counters) are picked
-# up automatically — no maintenance.
-#
-# Bias: when in doubt, leave a field OUT of this set. A wrongly-included field
-# means it doesn't round-trip (silent bug); a wrongly-excluded constant means
-# a few extra bytes per pkl (harmless).
-_PART_CONSTANT_KEYS = frozenset(
-    {
-        # Identity / asset config
-        "asset_file", "name", "part_idx", "part_config", "tag_ids",
-        "default_assembled_pose", "collision_margin", "mut_ori",
-        "ori_error_threshold", "pos_error_threshold",
-        "reset_ori", "reset_pos", "reset_x_len", "reset_y_len",
-        # Behavior config (set from constructor args / class attrs)
-        "no_noise", "no_iid_target_noise", "dart_amount",
-        "non_markovian", "_non_markovian", "_on_non_markovian_set",
-        "_DEFAULT_SPEED_CONFIG", "skill_complete_next_states",
-        "part_attached_skill_idx", "part_moved_skill_idx",
-        "_NM_MAX_PAUSE", "_NM_MIN_PAUSE",
-        "_NM_STEP_NOISE_POST_PAUSE_PROB", "_NM_STEP_NOISE_SWITCH_PROB",
-    }
-)
-
 
 def _to_cpu_deep(v):
     """Recursively clone tensors to CPU; deepcopy other Python containers/scalars.
@@ -149,17 +123,9 @@ def _to_cpu_deep(v):
 
 
 def _snap_part(part) -> dict:
-    """Reflectively snapshot every per-episode field on a part.
-
-    Walks `part.__dict__`, skips constants, captures everything else via
-    `_to_cpu_deep`. Future fields are auto-captured. Fields that fail
-    deepcopy (callables, weakrefs, etc.) print a warning and are skipped —
-    so silent omissions become visible at snapshot time.
-    """
+    """Reflectively snapshot every field in `part.__dict__` via `_to_cpu_deep`."""
     out = {}
     for k, v in part.__dict__.items():
-        if k in _PART_CONSTANT_KEYS:
-            continue
         try:
             out[k] = _to_cpu_deep(v)
         except Exception as e:
@@ -205,12 +171,13 @@ def snapshot(raw_env):
         "env_steps": raw_env.env_steps.clone(),
         "scripted_timeout": list(raw_env.scripted_timeout),
         "assembled_sets": [set(furn.assembled_set) for furn in raw_env.furnitures],
-        # Env-level NM pause counters (plain lists; `None` outside NM mode where
-        # the env may not have them). _to_cpu_deep handles the type generically
-        # so this works the same in both cases.
-        "_nm_pause_remaining": _to_cpu_deep(getattr(raw_env, "_nm_pause_remaining", None)),
-        "_nm_pause_gripper": _to_cpu_deep(getattr(raw_env, "_nm_pause_gripper", None)),
     }
+    # Reflectively capture all env-level non-Markovian state by `_nm_*` prefix.
+    # Future env-level NM fields are picked up automatically; matches the
+    # restore-side discovery in dagger_collect_corrections.py:restore().
+    for k, v in vars(raw_env).items():
+        if k.startswith("_nm_"):
+            phys[k] = _to_cpu_deep(v)
     parts = [[_snap_part(p) for p in furn.parts] for furn in raw_env.furnitures]
     return phys, parts
 
@@ -283,6 +250,12 @@ def main():
         "Use this when the policy was trained on non-Markovian scripted data so the FSM the "
         "FSM-tick observes matches what produced the training data.",
     )
+    parser.add_argument(
+        "--dart-amount",
+        type=float,
+        default=0.0,
+        help="DART action-noise scale passed to the env (matches scripted.py). 0.0 = no noise.",
+    )
     args = parser.parse_args()
 
     process_seed = args.seed if args.seed is not None else (uuid.uuid4().int & 0x7FFFFFFF)
@@ -307,10 +280,15 @@ def main():
     max_rollouts = args.max_rollouts or (20 * args.num_failures)
     print(f"rollout_max_steps={rollout_max_steps}, max_rollouts={max_rollouts}, non_markovian={args.non_markovian}")
 
+    # demo_source encodes the (iter, action_horizon, nm) tuple so different
+    # rollout configs for the same iter land in distinct dirs.
+    nm_tag = "nm" if args.non_markovian else "m"
+    ah_for_path = args.n_action_steps if args.n_action_steps is not None else "default"
+    demo_source = f"dagger_iter{args.iter}_ah{ah_for_path}_{nm_tag}"
     data_path = trajectory_save_dir(
         environment="sim",
         task=args.furniture,
-        demo_source=f"dagger_iter{args.iter}",
+        demo_source=demo_source,
         randomness=args.randomness,
     )
     failure_dir = data_path / "failure"
@@ -341,6 +319,7 @@ def main():
         compute_device_id=args.gpu_id,
         graphics_device_id=args.gpu_id,
         non_markovian=args.non_markovian,
+        dart_amount=args.dart_amount,
     )
     raw_env = env.unwrapped
 
@@ -395,6 +374,16 @@ def main():
                 env.get_assembly_action()
             except Exception as e:
                 print(f"  warning: get_assembly_action() at step {step}: {e}")
+
+            # The expert's FSM `satisfy()` timeouts (e.g. "EE didn't reach goal in
+            # max_len steps") latch raw_env.scripted_timeout[env_idx] = True, which
+            # furniture_sim_env.step() then forces into done=True. That's the right
+            # behavior when the expert is driving; here the expert is only observing,
+            # so its timeout is meaningless and would prematurely end the rollout
+            # (and label it as failure regardless of what the policy was doing).
+            # Clear the flag so only the policy's true termination signals stop us.
+            for _i in range(raw_env.num_envs):
+                raw_env.scripted_timeout[_i] = False
 
             # Snapshot BEFORE env.step → snapshots[i] is the state from which actions[i] runs
             # (and after the FSM tick above, so the FSM reflects the expert's view at obs[i]).

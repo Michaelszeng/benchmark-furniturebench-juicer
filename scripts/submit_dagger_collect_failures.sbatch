@@ -37,12 +37,15 @@ ACTION_HORIZON="${2:?missing action_horizon}"
 NON_MARKOVIAN="${3:?missing non_markovian (true/false)}"
 INSTANCE_IDX="${4:-0}"
 TOTAL_INSTANCES="${5:-1}"
+# DART_AMOUNT is inherited from the launcher's env (sbatch --export=ALL is default).
+# Fallback to 0.0 for direct sbatch invocations.
+DART_AMOUNT="${DART_AMOUNT:-0.0}"
 
 echo "$(date +'%F %T')  job=$SLURM_JOB_ID  host=$HOSTNAME"
 echo "ITER=$ITER  ACTION_HORIZON=$ACTION_HORIZON  NON_MARKOVIAN=$NON_MARKOVIAN"
 echo "INSTANCE_IDX=$INSTANCE_IDX  TOTAL_INSTANCES=$TOTAL_INSTANCES"
 echo "CHECKPOINT=$CHECKPOINT"
-echo "FURNITURE=$FURNITURE  NUM_FAILURES=$NUM_FAILURES"
+echo "FURNITURE=$FURNITURE  NUM_FAILURES=$NUM_FAILURES  DART_AMOUNT=$DART_AMOUNT"
 
 # --- Environment setup ---
 cd "$SLURM_SUBMIT_DIR" || { echo "cd failed"; exit 1; }
@@ -61,8 +64,10 @@ export PYTHONFAULTHANDLER=1
 
 NM_ARG=()
 case "${NON_MARKOVIAN,,}" in true|1|yes) NM_ARG=(--non-markovian) ;; esac
+NM_TAG=$([[ "${NON_MARKOVIAN,,}" == "true" || "${NON_MARKOVIAN}" == "1" || "${NON_MARKOVIAN,,}" == "yes" ]] && echo "nm" || echo "m")
 
-FAILURE_DIR="dataset/raw/sim/${FURNITURE}/dagger_iter${ITER}/low/failure"
+# Demo-source dir name MUST mirror dagger_collect_failures.py's path construction.
+FAILURE_DIR="dataset/raw/sim/${FURNITURE}/dagger_iter${ITER}_ah${ACTION_HORIZON}_${NM_TAG}/low/failure"
 
 echo "==== [1/2] dagger_collect_failures.py ===="
 python scripts/dagger_collect_failures.py \
@@ -71,6 +76,7 @@ python scripts/dagger_collect_failures.py \
     --iter "$ITER" \
     --num-failures "$NUM_FAILURES" \
     --n-action-steps "$ACTION_HORIZON" \
+    --dart-amount "$DART_AMOUNT" \
     --headless \
     "${NM_ARG[@]}"
 

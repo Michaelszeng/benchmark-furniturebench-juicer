@@ -32,7 +32,6 @@ Usage:
 """
 
 import argparse
-import copy
 import datetime
 import lzma
 import os
@@ -60,25 +59,6 @@ from src.visualization.render_mp4 import pickle_data
 
 # ── Restore ───────────────────────────────────────────────────────────────────
 
-# MUST stay in sync with the same set in dagger_collect_failures.py — fields here
-# are excluded from per-part snapshot/restore because they're constants set once
-# at __init__. Everything else on a part is treated as mutable per-episode state.
-_PART_CONSTANT_KEYS = frozenset(
-    {
-        "asset_file", "name", "part_idx", "part_config", "tag_ids",
-        "default_assembled_pose", "collision_margin", "mut_ori",
-        "ori_error_threshold", "pos_error_threshold",
-        "reset_ori", "reset_pos", "reset_x_len", "reset_y_len",
-        "no_noise", "no_iid_target_noise", "dart_amount",
-        "non_markovian", "_non_markovian", "_on_non_markovian_set",
-        "_DEFAULT_SPEED_CONFIG", "skill_complete_next_states",
-        "part_attached_skill_idx", "part_moved_skill_idx",
-        "_NM_MAX_PAUSE", "_NM_MIN_PAUSE",
-        "_NM_STEP_NOISE_POST_PAUSE_PROB", "_NM_STEP_NOISE_SWITCH_PROB",
-    }
-)
-
-
 def _to_device_deep(v, device):
     """Recursively move CPU tensors back to `device`, preserving nested structure.
 
@@ -105,11 +85,7 @@ def _restore_part(part, snap: dict, device) -> None:
     for k, v in snap.items():
         moved = _to_device_deep(v, device)
         existing = getattr(part, k, None)
-        if (
-            isinstance(existing, torch.Tensor)
-            and isinstance(moved, torch.Tensor)
-            and existing.shape == moved.shape
-        ):
+        if isinstance(existing, torch.Tensor) and isinstance(moved, torch.Tensor) and existing.shape == moved.shape:
             existing.copy_(moved)
         else:
             setattr(part, k, moved)
@@ -192,20 +168,19 @@ def restore(raw_env, phys, parts, zero_velocities: bool = False, gripper_open_of
             raw_env.sim, gymtorch.unwrap_tensor(torch.zeros_like(raw_env.dof_pos))
         )
 
-    # Reflective per-part restore — handles the 6 originally-captured fields plus
-    # any additional NM state (counter cycles, latent offsets, sticky countdowns,
-    # `_NM_LATENT_PLAN`, etc.) that the failures snapshot now captures.
+    # Reflective per-part restore — handles all NM state (counter cycles,
+    # latent offsets, sticky countdowns, `_NM_LATENT_PLAN`, etc.) plus the
+    # originally-captured FSM fields. New fields auto-flow through.
     for fi, fsnap in enumerate(parts):
         for pi, ps in enumerate(fsnap):
             _restore_part(raw_env.furnitures[fi].parts[pi], ps, raw_env.device)
 
-    # Env-level NM pause counters (plain Python lists when NM mode is on,
-    # `None` otherwise). The snapshot stored them via _to_cpu_deep so they
-    # survive pickling cleanly; just deepcopy back to detach from the snap dict.
-    if phys.get("_nm_pause_remaining") is not None and hasattr(raw_env, "_nm_pause_remaining"):
-        raw_env._nm_pause_remaining = copy.deepcopy(phys["_nm_pause_remaining"])
-    if phys.get("_nm_pause_gripper") is not None and hasattr(raw_env, "_nm_pause_gripper"):
-        raw_env._nm_pause_gripper = copy.deepcopy(phys["_nm_pause_gripper"])
+    # Env-level NM state: any phys key starting with `_nm_` was captured
+    # reflectively in snapshot() and is restored here by the same convention.
+    # Future env-level NM fields auto-flow through; no per-field maintenance.
+    for k, v in phys.items():
+        if k.startswith("_nm_") and hasattr(raw_env, k):
+            setattr(raw_env, k, _to_device_deep(v, raw_env.device))
 
 
 def _obs_to_numpy(obs, env_idx: int = 0) -> dict:
@@ -320,13 +295,6 @@ def run_expert_from_state(env, raw_env, phys_cpu, parts_cpu, max_steps: int, ret
     # snapshot()'s ctrl-state restore relies on `for ctrl, s in zip(raw_env.osc_ctrls, ...)`,
     # which is a no-op when osc_ctrls is empty — so without this step the gate-time
     # controller state would be silently dropped.
-    #
-    # Note: we deliberately do NOT call _configure_nm_episode() here even in NM
-    # mode — restore() below puts the part NM fields (latent_offsets, _NM_LATENT_PLAN,
-    # the `nm_*` cycle counters, etc.) back to the values captured during failure
-    # collection, which is exactly what we want. Calling apply_non_markovian_config()
-    # first would only sample fresh latents that the restore would immediately
-    # overwrite.
     env.reset()
     try:
         _, prime_clean, _ = env.get_assembly_action()
@@ -424,22 +392,41 @@ def main():
         "dagger_collect_failures.py).",
     )
     parser.add_argument(
-        "--instance-idx", type=int, default=0,
+        "--instance-idx",
+        type=int,
+        default=0,
         help="0-indexed instance number for parallel runs. Combined with --total-instances, "
         "selects this instance's slice of labeled failures via candidates[idx::total].",
     )
     parser.add_argument("--total-instances", type=int, default=1)
+    parser.add_argument(
+        "--action-horizon",
+        type=int,
+        required=True,
+        help="Action horizon used during failure collection (used only to locate the iter dir).",
+    )
+    parser.add_argument(
+        "--dart-amount",
+        type=float,
+        default=0.0,
+        help="DART action-noise scale passed to the env. 0.0 = no noise.",
+    )
     args = parser.parse_args()
 
     process_seed = args.seed if args.seed is not None else (uuid.uuid4().int & 0x7FFFFFFF)
     print(f"[seed] process_seed={process_seed}")
+
+    # demo_source MUST match what dagger_collect_failures.py wrote: same (iter, ah, nm) tuple.
+    nm_tag = "nm" if args.non_markovian else "m"
+    demo_source = f"dagger_iter{args.iter}_ah{args.action_horizon}_{nm_tag}"
+    print(f"demo_source={demo_source}")
 
     # Discover labeled failures.
     failure_dir = (
         trajectory_save_dir(
             environment="sim",
             task=args.furniture,
-            demo_source=f"dagger_iter{args.iter}",
+            demo_source=demo_source,
             randomness=args.randomness,
             create=False,
         )
@@ -467,7 +454,7 @@ def main():
     iter_dir = trajectory_save_dir(
         environment="sim",
         task=args.furniture,
-        demo_source=f"dagger_iter{args.iter}",
+        demo_source=demo_source,
         randomness=args.randomness,
     )
     success_dir = iter_dir / "correction" / "success"
@@ -500,6 +487,7 @@ def main():
         graphics_device_id=args.gpu_id,
         ctrl_mode="osc",
         non_markovian=args.non_markovian,
+        dart_amount=args.dart_amount,
     )
     raw_env = env.unwrapped
 
@@ -526,7 +514,12 @@ def main():
             retry_seed = (process_seed + pi * 1000 + retry) % (2**31)
             print(f"  retry {retry + 1}/{args.max_retries} (seed={retry_seed})")
             ok, ep = run_expert_from_state(
-                env, raw_env, phys_cpu, parts_cpu, rollout_max_steps, retry_seed,
+                env,
+                raw_env,
+                phys_cpu,
+                parts_cpu,
+                rollout_max_steps,
+                retry_seed,
             )
             if ok:
                 ep["furniture"] = args.furniture

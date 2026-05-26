@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=dagger_failures
 #SBATCH --account=locomotion
-#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --partition=vision-shared-rtx4090
 #SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1
 #SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
@@ -26,7 +26,7 @@
 # submit_dagger_collect_corrections.sbatch for the same iter.
 
 # === CONSTANTS (edit before running) ====================================
-CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_dart_1_0_200_eps/checkpoints/MODEL.ckpt"
+CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_non_markovian_200_eps/checkpoints/epoch=070-val_loss=0.0682-val_ddim_mse=0.010428.ckpt"
 
 FURNITURE="one_leg"
 NUM_FAILURES=20

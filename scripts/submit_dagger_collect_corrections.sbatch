@@ -26,6 +26,9 @@
 
 # === CONSTANTS (edit before running) ====================================
 FURNITURE="one_leg"
+# DEBUG flags (true/false). Both default false for normal training-data collection.
+DEBUG_FULL_ROLLOUT="false"     # save full policy rollout (option B) → correction_debug/
+SAVE_FAILED_ATTEMPTS="false"   # also save every failed expert attempt → correction[_debug]/failure/
 # ========================================================================
 
 ITER="${1:?Usage: sbatch ... <iter> <action_horizon> <non_markovian> [instance_idx total_instances]}"
@@ -43,6 +46,7 @@ echo "$(date +'%F %T')  job=$SLURM_JOB_ID  host=$HOSTNAME"
 echo "ITER=$ITER  ACTION_HORIZON=$ACTION_HORIZON  NON_MARKOVIAN=$NON_MARKOVIAN"
 echo "INSTANCE_IDX=$INSTANCE_IDX  TOTAL_INSTANCES=$TOTAL_INSTANCES"
 echo "FURNITURE=$FURNITURE  DEMO_SOURCE=$DEMO_SOURCE  DART_AMOUNT=$DART_AMOUNT"
+echo "DEBUG_FULL_ROLLOUT=$DEBUG_FULL_ROLLOUT  SAVE_FAILED_ATTEMPTS=$SAVE_FAILED_ATTEMPTS"
 
 # --- Environment setup ---
 cd "$SLURM_SUBMIT_DIR" || { echo "cd failed"; exit 1; }
@@ -61,6 +65,10 @@ export PYTHONFAULTHANDLER=1
 
 NM_ARG=()
 case "${NON_MARKOVIAN,,}" in true|1|yes) NM_ARG=(--non-markovian) ;; esac
+DEBUG_ARG=()
+case "${DEBUG_FULL_ROLLOUT,,}" in true|1|yes) DEBUG_ARG=(--debug-full-rollout) ;; esac
+FAILED_ARG=()
+case "${SAVE_FAILED_ATTEMPTS,,}" in true|1|yes) FAILED_ARG=(--save-failed-attempts) ;; esac
 
 FAILURE_DIR="dataset/raw/sim/${FURNITURE}/${DEMO_SOURCE}/low/failure"
 if [ ! -d "$FAILURE_DIR" ]; then
@@ -77,7 +85,9 @@ python scripts/dagger_collect_corrections.py \
     --instance-idx "$INSTANCE_IDX" \
     --total-instances "$TOTAL_INSTANCES" \
     --headless \
-    "${NM_ARG[@]}"
+    "${NM_ARG[@]}" \
+    "${DEBUG_ARG[@]}" \
+    "${FAILED_ARG[@]}"
 
 # --- Barrier + lock: only the last instance runs process_pickles. -------
 CORR_DIR="dataset/raw/sim/${FURNITURE}/${DEMO_SOURCE}/low/correction"

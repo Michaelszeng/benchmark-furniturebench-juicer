@@ -36,9 +36,15 @@ import datetime
 import lzma
 import os
 import pickle
+import re
 import sys
 import uuid
 from pathlib import Path
+
+# Matches the "NN__" numeric prefix produced by dagger_collect_failures.py's
+# _claim_failure_number; re-used here so a correction pkl carries the same
+# prefix as the failure pkl it came from (for at-a-glance association).
+_FAILURE_NUMBER_PREFIX_RE = re.compile(r"^(\d+)__")
 
 if "DATA_DIR_RAW" not in os.environ:
     os.environ["DATA_DIR_RAW"] = "dataset"
@@ -59,6 +65,7 @@ from src.data_processing.utils import resize, resize_crop
 from src.visualization.render_mp4 import pickle_data
 
 # ── Restore ───────────────────────────────────────────────────────────────────
+
 
 def _to_device_deep(v, device):
     """Recursively move CPU tensors back to `device`, preserving nested structure.
@@ -286,9 +293,10 @@ def _scale_for_env(action, raw_env):
 def run_expert_from_state(env, raw_env, phys_cpu, parts_cpu, max_steps: int, retry_seed: int):
     """Restore to the snapshot, then roll out the scripted expert to terminal.
 
-    Returns (success: bool, episode_data: dict | None). episode_data, when set,
-    is in the exact format DataCollector.save() writes — directly consumable by
-    process_pickles.py.
+    Returns (success: bool, episode_data: dict). episode_data is ALWAYS returned
+    (even on failure / exception) so callers can save failed attempts for
+    debugging. The dict's "success" / "error" fields reflect the actual outcome.
+    Length invariant holds in all paths: len(observations) == len(actions) + 1.
     """
     np.random.seed(retry_seed)
 
@@ -316,13 +324,15 @@ def run_expert_from_state(env, raw_env, phys_cpu, parts_cpu, max_steps: int, ret
     buf_skills: list = []
     step = 0
     done = False
+    error_msg = ""
 
     while not done and step < max_steps:
         try:
             noisy_action, clean_action, skill_complete = env.get_assembly_action()
         except Exception as e:
-            print(f"    get_assembly_action raised at step {step}: {e}")
-            return False, None
+            error_msg = f"get_assembly_action raised error at step {step}: {e}"
+            print(f"    {error_msg}")
+            break
 
         action_to_apply = _scale_for_env(noisy_action, raw_env)
         record_action = _scale_for_env(clean_action, raw_env)
@@ -330,8 +340,9 @@ def run_expert_from_state(env, raw_env, phys_cpu, parts_cpu, max_steps: int, ret
         try:
             next_obs, rew, done_t, info = env.step(action_to_apply)
         except RuntimeError as e:
-            print(f"    env.step RuntimeError at step {step}: {e}")
-            return False, None
+            error_msg = f"env.step RuntimeError at step {step}: {e}"
+            print(f"    {error_msg}")
+            break
 
         if not info.get("action_success", True):
             obs = next_obs
@@ -357,22 +368,21 @@ def run_expert_from_state(env, raw_env, phys_cpu, parts_cpu, max_steps: int, ret
         done = bool(done_t.any())
         step += 1
 
-    # Terminal obs — DataCollector also appends this after the loop.
+    # Terminal obs — always appended so the length invariant holds even on
+    # early exit (exception path) or premature timeout. DataCollector does the
+    # same after its loop.
     obs_np = _obs_to_numpy(obs)
     buf_obs.append({k: obs_np[k] for k in ["color_image1", "color_image2", "robot_state", "parts_poses"]})
 
     success = bool(raw_env.furnitures[0].all_assembled())
-    if not success:
-        return False, None
-
-    return True, {
+    return success, {
         "observations": buf_obs,
         "actions": buf_acts,
         "rewards": buf_rews,
         "skills": buf_skills,
-        "success": True,
-        "error": False,
-        "error_description": "",
+        "success": success,
+        "error": bool(error_msg),
+        "error_description": error_msg,
     }
 
 
@@ -411,6 +421,19 @@ def main():
         type=float,
         default=0.0,
         help="DART action-noise scale passed to the env. 0.0 = no noise.",
+    )
+    parser.add_argument(
+        "--debug-full-rollout",
+        action="store_true",
+        help="DEBUG: prepend the entire policy rollout to the corrections so that the recorded .pkl contains the "
+        "entire episode (not just the correction). Used only for debugging; saves to `correction_debug/success/`.",
+    )
+    parser.add_argument(
+        "--save-failed-attempts",
+        action="store_true",
+        help="DEBUG: also save every failed expert attempt to `correction[_debug]/failure/` with a "
+        "`_retry{N}_` segment in the filename. Useful for visualizing what the expert tried before "
+        "eventually succeeding (or giving up after --max-retries).",
     )
     args = parser.parse_args()
 
@@ -458,9 +481,10 @@ def main():
         demo_source=demo_source,
         randomness=args.randomness,
     )
-    success_dir = iter_dir / "correction" / "success"
+    correction_subdir = "correction_debug" if args.debug_full_rollout else "correction"
+    success_dir = iter_dir / correction_subdir / "success"
     success_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Correction dir: {success_dir}")
+    print(f"Correction dir: {success_dir}  (mode={'B-debug' if args.debug_full_rollout else 'B-prime'})")
 
     if args.non_markovian:
         rollout_max_steps = sim_config["nm_scripted_timeout"].get(
@@ -510,6 +534,11 @@ def main():
             continue
         phys_cpu, parts_cpu = snaps[gate_idx]
 
+        # Mirror the source failure pkl's "NN__" prefix on outputs so each
+        # correction (or failed attempt) is visually associated with its origin.
+        m = _FAILURE_NUMBER_PREFIX_RE.match(fp.name)
+        prefix = f"{m.group(1)}__" if m else ""
+
         saved = False
         for retry in range(args.max_retries):
             retry_seed = (process_seed + pi * 1000 + retry) % (2**31)
@@ -522,41 +551,61 @@ def main():
                 rollout_max_steps,
                 retry_seed,
             )
+
+            # ── Prepend pre-gate policy data so the gate window has the right history ──
+            # Applied to BOTH success and failure paths so failed attempts (saved when
+            # --save-failed-attempts is on) have the same format/visualization as
+            # successful corrections.
+            assert gate_idx >= 1, (
+                f"gate_idx={gate_idx} must be >= 1; dagger_label_gates.py should have rejected this at label time."
+            )
+            if args.debug_full_rollout:
+                # Pre-pend the entire policy rollout to the corrections.
+                # obs[0..gate_idx] from policy, obs[gate_idx+1..] from expert.
+                # actions[0..gate_idx-1] from policy, actions[gate_idx..] from expert.
+                pre_obs_list = list(fail_data["observations"][: gate_idx + 1])  # o_0..o_n
+                pre_acts_10d = np.asarray(fail_data["actions"][:gate_idx], dtype=np.float32)
+                pre_acts_8d = list(np_action_6d_to_quat(pre_acts_10d))
+                pre_rewards = [float(r) for r in fail_data["rewards"][:gate_idx]]
+                ep["observations"] = pre_obs_list + ep["observations"][1:]
+                ep["actions"] = pre_acts_8d + ep["actions"]
+                ep["rewards"] = pre_rewards + ep["rewards"]
+                ep["skills"] = [0] * gate_idx + ep["skills"]
+                ep["dagger_pre_gate_obs_included"] = gate_idx + 1
+                ep["dagger_debug_full_rollout"] = True
+            else:
+                # Pre-pend single (o_{n-1}, o_n) so gate window's history matches policy view.
+                pre_obs = fail_data["observations"][gate_idx - 1]
+                gate_obs = fail_data["observations"][gate_idx]
+                pre_act_10d = np.asarray(fail_data["actions"][gate_idx - 1], dtype=np.float32)
+                pre_act_8d = np_action_6d_to_quat(pre_act_10d[np.newaxis, :])[0]
+                pre_reward = float(fail_data["rewards"][gate_idx - 1])
+                ep["observations"] = [pre_obs, gate_obs] + ep["observations"][1:]
+                ep["actions"] = [pre_act_8d] + ep["actions"]
+                ep["rewards"] = [pre_reward] + ep["rewards"]
+                ep["skills"] = [0] + ep["skills"]
+                ep["dagger_pre_gate_obs_included"] = 2
+            ep["furniture"] = args.furniture
+            ep["dagger_origin"] = fp.name
+            ep["dagger_gate_idx"] = gate_idx
+            ep["dagger_iter"] = args.iter
+
+            ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
+
             if ok:
-                # ── B′: prepend a single pre-gate (o_{n-1}, a_{n-1}^policy) sample ──
-                # The training sampler's window starting at the gate then sees
-                # the policy-induced history (o_{n-1}, o_n) and predicts the
-                # action sequence [a_{n-1}^policy, a_n^expert, a_{n+1}^expert, ...].
-                # The past-action slot a_{n-1}^policy is discarded at execution
-                # (past_action_visible=false in the training config), so its
-                # policy-origin label is harmless. All later sampler windows see
-                # only expert-labeled actions.
-                # Skipped when gate_idx == 0 (no o_{n-1} exists in the failure pkl).
-                if gate_idx >= 1:
-                    pre_obs = fail_data["observations"][gate_idx - 1]
-                    pre_act_10d = np.asarray(fail_data["actions"][gate_idx - 1], dtype=np.float32)
-                    # Policy emitted 10-D rot_6d (failures env act_rot_repr="rot_6d");
-                    # scripted-format pkl + process_pickles.py expect 8-D quat. Convert.
-                    pre_act_8d = np_action_6d_to_quat(pre_act_10d[np.newaxis, :])[0]
-                    pre_reward = float(fail_data["rewards"][gate_idx - 1])
-                    ep["observations"] = [pre_obs] + ep["observations"]
-                    ep["actions"] = [pre_act_8d] + ep["actions"]
-                    ep["rewards"] = [pre_reward] + ep["rewards"]
-                    ep["skills"] = [0] + ep["skills"]
-                    ep["dagger_pre_gate_obs_included"] = 1
-                else:
-                    ep["dagger_pre_gate_obs_included"] = 0
-                ep["furniture"] = args.furniture
-                ep["dagger_origin"] = fp.name
-                ep["dagger_gate_idx"] = gate_idx
-                ep["dagger_iter"] = args.iter
-                ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
-                out_path = success_dir / f"{ts}_pid{os.getpid()}.pkl.xz"
+                out_path = success_dir / f"{prefix}{ts}_pid{os.getpid()}.pkl.xz"
                 pickle_data(ep, out_path)
                 print(f"  saved -> {out_path.name}   (length {len(ep['actions'])})")
                 n_saved += 1
                 saved = True
                 break
+            elif args.save_failed_attempts:
+                failed_dir = iter_dir / correction_subdir / "failure"
+                failed_dir.mkdir(parents=True, exist_ok=True)
+                ep["dagger_retry"] = retry
+                failed_path = failed_dir / f"{prefix}{ts}_retry{retry}_pid{os.getpid()}.pkl.xz"
+                pickle_data(ep, failed_path)
+                print(f"    saved failed attempt -> {failed_path.name}   (length {len(ep['actions'])}); retrying")
             else:
                 print("    expert did not succeed from gate; retrying")
 

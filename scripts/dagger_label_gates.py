@@ -82,8 +82,11 @@ def _prompt_gate(preview_name: str, can_undo: bool):
             return ("undo", None)
         try:
             n = int(resp)
-            if n < 0:
-                raise ValueError("must be >= 0")
+            # gate_idx must be >= 1: dagger_collect_corrections.py needs at least
+            # one preceding obs (o_{n-1}) to form the correct (o_{n-1}, o_n) policy
+            # history for the gate sample. Gate=0 would have no preceding obs.
+            if n < 1:
+                raise ValueError("must be >= 1 (gate=0 has no preceding obs for history context)")
             return ("label", n)
         except ValueError as e:
             print(f"    invalid ({e}); try again")

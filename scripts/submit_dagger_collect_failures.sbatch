@@ -2,7 +2,7 @@
 #SBATCH --job-name=dagger_failures
 #SBATCH --account=locomotion
 #SBATCH --partition=vision-shared-rtx3090
-#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1
+#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl
 #SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1

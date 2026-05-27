@@ -2,7 +2,7 @@
 #SBATCH --job-name=dagger_corrections
 #SBATCH --account=locomotion
 #SBATCH --partition=vision-shared-rtx3090
-#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1
+#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl
 #SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -15,10 +15,10 @@
 #SBATCH --requeue
 
 # Usage:
-#   sbatch scripts/submit_dagger_collect_corrections.sbatch <iter> <non_markovian>
+#   sbatch scripts/submit_dagger_collect_corrections.sbatch <iter> <action_horizon> <non_markovian>
 #
 # Multi-instance parallel submission:
-#   bash scripts/launch_dagger_collect_corrections.sh <num_procs> <iter> <non_markovian>
+#   bash scripts/launch_dagger_collect_corrections.sh <num_procs> <iter> <action_horizon> <non_markovian>
 #
 # Each instance handles candidates[instance_idx::total_instances] of the labeled
 # failures. The LAST instance to reach the barrier runs process_pickles once
@@ -36,7 +36,7 @@ TOTAL_INSTANCES="${5:-1}"
 DART_AMOUNT="${DART_AMOUNT:-0.0}"
 
 NM_TAG=$([[ "${NON_MARKOVIAN,,}" == "true" || "${NON_MARKOVIAN}" == "1" || "${NON_MARKOVIAN,,}" == "yes" ]] && echo "nm" || echo "m")
-DEMO_SOURCE="${DEMO_SOURCE}_ah${ACTION_HORIZON}_${NM_TAG}"
+DEMO_SOURCE="dagger_iter${ITER}_ah${ACTION_HORIZON}_${NM_TAG}"
 OUTPUT_NAME="$DEMO_SOURCE"
 
 echo "$(date +'%F %T')  job=$SLURM_JOB_ID  host=$HOSTNAME"
@@ -87,7 +87,7 @@ LOCK_DIR="${CORR_DIR}/.process_lock"
 mkdir -p "$DONE_DIR"
 touch "${DONE_DIR}/${SLURM_JOB_ID:-$$}"
 N_DONE=$(ls "$DONE_DIR" 2>/dev/null | wc -l)
-echo "barrier: ${N_DONE}/${TOTAL_INSTANCES} instances finished"
+echo "Job coordination: ${N_DONE} out of ${TOTAL_INSTANCES} parallel instances have completed their assigned slice of failures."
 
 if [ "$N_DONE" -ge "$TOTAL_INSTANCES" ] && mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "==== [2/2] process_pickles.py (last instance, lock acquired) ===="

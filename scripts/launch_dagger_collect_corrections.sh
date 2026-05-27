@@ -35,7 +35,6 @@ echo "Submitting $N parallel correction-collection jobs"
 echo "  iter=$ITER  ah=$ACTION_HORIZON  nm=$NON_MARKOVIAN  dart=$DART_AMOUNT"
 echo "  → $CORR_DIR"
 for i in $(seq 0 $((N - 1))); do
-    sbatch --export=ALL,DART_AMOUNT="$DART_AMOUNT" \
-        scripts/submit_dagger_collect_corrections.sbatch \
+    sbatch scripts/submit_dagger_collect_corrections.sbatch \
         "$ITER" "$ACTION_HORIZON" "$NON_MARKOVIAN" "$i" "$N"
 done

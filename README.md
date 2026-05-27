@@ -96,8 +96,27 @@ conda activate py38
 3. Ensure you follow the **Evaluating a diffusion_policy Checkpoint** instructions above as well.
 
 
+### Semi-Automated DAgger Pipeline
 
+The DAgger pipeline is a three-step process for collecting failures, annotating them, and gathering corrections:
 
+1. **Collect Failures:**
+   Launch parallel jobs to collect policy failures. The final job automatically renders MP4 previews of the failures.
+   ```bash
+   bash scripts/launch_dagger_collect_failures.sh <num_procs> <iter> <action_horizon> <non_markovian>
+   ```
+
+2. **Label Gates:**
+   Watch the generated MP4 previews and label the "gate" (bottleneck) frame for each failure.
+   ```bash
+   python scripts/dagger_label_gates.py <path_to_failure_dir>
+   ```
+
+3. **Collect Corrections:**
+   Launch parallel jobs to collect expert corrections starting from the labeled gates. The final job automatically processes the new data into a `.zarr` dataset.
+   ```bash
+   bash scripts/launch_dagger_collect_corrections.sh <num_procs> <iter> <action_horizon> <non_markovian>
+   ```
 
 #### Robust Re-arrangement Data
 

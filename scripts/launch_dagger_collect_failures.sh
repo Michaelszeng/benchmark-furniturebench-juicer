@@ -34,8 +34,8 @@ rm -rf "${FAILURE_DIR}/.collect_done" "${FAILURE_DIR}/.render_lock"
 echo "Submitting $N parallel failure-collection jobs"
 echo "  iter=$ITER  ah=$ACTION_HORIZON  nm=$NON_MARKOVIAN  dart=$DART_AMOUNT"
 echo "  → $FAILURE_DIR"
+
 for i in $(seq 0 $((N - 1))); do
-    sbatch --export=ALL,DART_AMOUNT="$DART_AMOUNT" \
-        scripts/submit_dagger_collect_failures.sbatch \
+    sbatch scripts/submit_dagger_collect_failures.sbatch \
         "$ITER" "$ACTION_HORIZON" "$NON_MARKOVIAN" "$i" "$N"
 done

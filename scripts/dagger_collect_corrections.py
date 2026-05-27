@@ -54,6 +54,7 @@ from furniture_bench.sim_config import sim_config
 from furniture_bench.utils.scripted_demo_mod import scale_scripted_action
 
 from src.common.files import trajectory_save_dir
+from src.common.geometry import np_action_6d_to_quat
 from src.data_processing.utils import resize, resize_crop
 from src.visualization.render_mp4 import pickle_data
 
@@ -522,6 +523,29 @@ def main():
                 retry_seed,
             )
             if ok:
+                # ── B′: prepend a single pre-gate (o_{n-1}, a_{n-1}^policy) sample ──
+                # The training sampler's window starting at the gate then sees
+                # the policy-induced history (o_{n-1}, o_n) and predicts the
+                # action sequence [a_{n-1}^policy, a_n^expert, a_{n+1}^expert, ...].
+                # The past-action slot a_{n-1}^policy is discarded at execution
+                # (past_action_visible=false in the training config), so its
+                # policy-origin label is harmless. All later sampler windows see
+                # only expert-labeled actions.
+                # Skipped when gate_idx == 0 (no o_{n-1} exists in the failure pkl).
+                if gate_idx >= 1:
+                    pre_obs = fail_data["observations"][gate_idx - 1]
+                    pre_act_10d = np.asarray(fail_data["actions"][gate_idx - 1], dtype=np.float32)
+                    # Policy emitted 10-D rot_6d (failures env act_rot_repr="rot_6d");
+                    # scripted-format pkl + process_pickles.py expect 8-D quat. Convert.
+                    pre_act_8d = np_action_6d_to_quat(pre_act_10d[np.newaxis, :])[0]
+                    pre_reward = float(fail_data["rewards"][gate_idx - 1])
+                    ep["observations"] = [pre_obs] + ep["observations"]
+                    ep["actions"] = [pre_act_8d] + ep["actions"]
+                    ep["rewards"] = [pre_reward] + ep["rewards"]
+                    ep["skills"] = [0] + ep["skills"]
+                    ep["dagger_pre_gate_obs_included"] = 1
+                else:
+                    ep["dagger_pre_gate_obs_included"] = 0
                 ep["furniture"] = args.furniture
                 ep["dagger_origin"] = fp.name
                 ep["dagger_gate_idx"] = gate_idx

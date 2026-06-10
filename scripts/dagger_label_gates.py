@@ -8,11 +8,40 @@ etc.), read the frame number off the burned-in counter, and type it in.
 How the gate is stored
 ----------------------
 The gate is **appended** to the failure pkl as an additional xz stream
-containing a small pickle ``{"gate_idx": N, "labeled_at": ...}``. The xz
-container natively supports concatenated streams, so the file remains a
-valid .pkl.xz that ``lzma.open`` reads transparently — but writing the
+containing a small pickle ``{"gate_idx": N, "labeled_at": ..., "overrides": ...}``.
+The xz container natively supports concatenated streams, so the file remains
+a valid .pkl.xz that ``lzma.open`` reads transparently — but writing the
 label is O(1) (a few hundred bytes), with no rewrite of the multi-MB main
 pickle.
+
+Per-gate overrides
+------------------
+After the gate frame is entered, two optional override prompts capture:
+
+  - force_pre_assemble_done: list of part indices to set to True on restore.
+    Use this when the policy actually placed an earlier part correctly but
+    the FSM never observed the simultaneity window that flips its
+    pre_assemble_done flag (so without the override the expert would
+    re-assemble a part that's already in place).
+  - force_state: {part_idx: state_name} to override _last_state on restore.
+    Necessary for the Non-Markovian expert (where compute_state's sequential
+    transition check reads _last_state) and useful when the snapshotted FSM
+    state is in a stuck configuration. By design dagger_collect_corrections.py
+    does NOT reset NM cycle counters / align_offset / other per-part caches:
+    the chosen override state is presumed not-yet-reached, so its counters
+    should already be at initial defaults from the snapshot. Pick a different
+    override state if that assumption fails.
+
+State names are validated against the relevant part class's ALL_STATES
+constant (Leg.ALL_STATES / TableTop.ALL_STATES).
+
+Furniture support
+-----------------
+The part-name → part-class dispatch (for state-name validation) is currently
+HARDCODED for one_leg / square_table: "leg" in name → Leg.ALL_STATES,
+"top" or "body" in name → TableTop.ALL_STATES. Other furniture (cabinet,
+lamp, round_table) will hit an explicit error during validation — extend
+``_part_class_for`` when adding support.
 
 Already-labeled detection
 -------------------------
@@ -36,6 +65,8 @@ import lzma
 import pickle
 from pathlib import Path
 
+import torch  # noqa: F401 — required to unpickle the torch tensors in failure pkls
+
 
 def _pkl_for_preview(preview_path: Path):
     """Return the matching .pkl.xz (preferred) or .pkl next to a preview, or None."""
@@ -55,9 +86,11 @@ def _is_labeled(pkl_path: Path, preview_path: Path) -> bool:
     return pkl_path.stat().st_mtime > preview_path.stat().st_mtime
 
 
-def _append_gate(pkl_path: Path, gate_idx: int) -> None:
+def _append_gate(pkl_path: Path, gate_idx: int, overrides: dict | None = None) -> None:
     """Append a tiny xz-compressed gate record. O(1) — no rewrite of the main pickle."""
     patch = {"gate_idx": int(gate_idx), "labeled_at": datetime.datetime.now().isoformat()}
+    if overrides:
+        patch["overrides"] = overrides
     encoded = lzma.compress(pickle.dumps(patch))
     with open(pkl_path, "ab") as f:
         f.write(encoded)
@@ -67,6 +100,124 @@ def _truncate_to(pkl_path: Path, target_size: int) -> None:
     """Cut the file back to ``target_size`` bytes — used to undo an appended gate stream."""
     with open(pkl_path, "r+b") as f:
         f.truncate(target_size)
+
+
+def _load_snapshot_parts(pkl_path: Path, gate_idx: int):
+    """Load the failure pkl's first stream and return parts[0] at gate_idx.
+
+    Returns None if gate_idx is out of range or the pkl is malformed.
+    """
+    with lzma.open(pkl_path, "rb") as f:
+        data = pickle.load(f)  # first stream = main data; gate streams come after
+    snapshots = data.get("snapshots", [])
+    if not (0 <= gate_idx < len(snapshots)):
+        print(f"    invalid gate_idx={gate_idx}: snapshot count is {len(snapshots)}")
+        return None
+    _phys, parts = snapshots[gate_idx]
+    return parts[0] if parts else None  # single-env failure pkls
+
+
+def _part_class_for(part_name: str):
+    """Return the Part subclass for a given snapshot part name.
+
+    HARDCODED for one_leg / square_table — extend when adding other furniture.
+    Lazy-imports furniture_bench (heavy: triggers IsaacGym) only when this
+    function is actually called.
+    """
+    from furniture_bench.furniture.parts.leg import Leg
+    from furniture_bench.furniture.parts.table_top import TableTop
+
+    name = part_name.lower()
+    if "leg" in name:
+        return Leg
+    if "top" in name or "body" in name:
+        return TableTop
+    raise ValueError(
+        f"Unknown part name {part_name!r} — _part_class_for dispatch only knows "
+        f"one_leg / square_table parts. Extend dagger_label_gates.py:_part_class_for "
+        f"to add other furniture types."
+    )
+
+
+def _display_snapshot_state(parts: list) -> None:
+    """Print a per-part summary of the snapshotted FSM state at the gate.
+
+    The first part with pre_assemble_done=False is marked (ACTIVE), matching
+    the sequential-FSM convention (table_top pre-assembled first, then each
+    leg in order; the FSM works on the lowest-index not-yet-done part).
+    """
+    active_marked = False
+    for i, p in enumerate(parts):
+        name = p.get("name", "<unknown>")
+        pad = p.get("pre_assemble_done", "?")
+        ls = p.get("_last_state", "?")
+        marker = ""
+        if not active_marked and pad is False:
+            marker = "  <- ACTIVE"
+            active_marked = True
+        print(f"    parts[{i}]={name:30s}  pre_assemble_done={str(pad):5s}  _last_state={ls!r}{marker}")
+
+
+def _prompt_yes_no(question: str, default: bool = True) -> bool:
+    """Y/n prompt with retry on invalid input. Empty input → default."""
+    suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        resp = input(f"  {question} {suffix}: ").strip().lower()
+        if not resp:
+            return default
+        if resp in ("y", "yes"):
+            return True
+        if resp in ("n", "no"):
+            return False
+        print("    invalid; please answer y or n")
+
+
+def _prompt_pre_assemble_done_overrides(n_parts: int) -> list:
+    """Parse comma-separated part indices; re-prompt on invalid input. Empty → []."""
+    while True:
+        resp = input("  Force pre_assemble_done=True for parts (comma-sep idx, Enter=none): ").strip()
+        if not resp:
+            return []
+        try:
+            indices = [int(tok.strip()) for tok in resp.split(",") if tok.strip()]
+            for i in indices:
+                if not 0 <= i < n_parts:
+                    raise ValueError(f"part index {i} out of range [0, {n_parts - 1}]")
+            return sorted(set(indices))
+        except ValueError as e:
+            print(f"    invalid ({e}); try again")
+
+
+def _prompt_state_overrides(parts: list) -> dict:
+    """Parse comma-separated 'idx=state' pairs; re-prompt on invalid input. Empty → {}."""
+    while True:
+        resp = input("  Set _last_state (format: idx=state, comma-sep, Enter=none): ").strip()
+        if not resp:
+            return {}
+        try:
+            out: dict = {}
+            for tok in resp.split(","):
+                tok = tok.strip()
+                if not tok:
+                    continue
+                if "=" not in tok:
+                    raise ValueError(f"missing '=' in {tok!r}")
+                idx_s, state = tok.split("=", 1)
+                idx = int(idx_s.strip())
+                state = state.strip()
+                if not 0 <= idx < len(parts):
+                    raise ValueError(f"part index {idx} out of range [0, {len(parts) - 1}]")
+                part_name = parts[idx].get("name", "<unknown>")
+                part_cls = _part_class_for(part_name)
+                if state not in part_cls.ALL_STATES:
+                    raise ValueError(
+                        f"{state!r} is not a valid state for {part_name!r} "
+                        f"({part_cls.__name__}.ALL_STATES = {list(part_cls.ALL_STATES)})"
+                    )
+                out[idx] = state
+            return out
+        except ValueError as e:
+            print(f"    invalid ({e}); try again")
 
 
 def _prompt_gate(preview_name: str, can_undo: bool):
@@ -157,10 +308,35 @@ def main() -> None:
             i = prev_i
             continue
 
+        # Load snapshot at this gate so we can display the FSM state and let
+        # the user confirm or override. parts is the per-part list at the gate.
+        parts = _load_snapshot_parts(pkl, frame)
+        if parts is None:
+            print("  could not load snapshot; saving gate without overrides")
+            overrides_dict = None
+        else:
+            print(f"  Snapshot FSM state at gate={frame}:")
+            _display_snapshot_state(parts)
+            if _prompt_yes_no("Is this state correct?", default=True):
+                overrides_dict = None
+            else:
+                force_pad = _prompt_pre_assemble_done_overrides(n_parts=len(parts))
+                force_state = _prompt_state_overrides(parts)
+                overrides_dict = {}
+                if force_pad:
+                    overrides_dict["force_pre_assemble_done"] = force_pad
+                if force_state:
+                    overrides_dict["force_state"] = force_state
+                if not overrides_dict:
+                    overrides_dict = None
+
         size_before = pkl.stat().st_size
-        _append_gate(pkl, frame)
+        _append_gate(pkl, frame, overrides_dict)
         undo_stack.append((i, pkl, size_before))
-        print(f"  -> gate={frame} appended to {pkl.name}")
+        if overrides_dict:
+            print(f"  -> gate={frame} with overrides={overrides_dict} appended to {pkl.name}")
+        else:
+            print(f"  -> gate={frame} appended to {pkl.name}")
         n_new += 1
         i += 1
 

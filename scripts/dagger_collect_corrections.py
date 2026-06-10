@@ -232,9 +232,10 @@ def _has_gate_mtime(pkl_path: Path) -> bool:
 def _load_pkl_with_gate(pkl_path: Path):
     """Load a failure pkl that may have appended gate xz streams.
 
-    Returns (data: dict, gate_idx: int | None). If multiple gate streams have
-    been appended (e.g. via --relabel), the most recent one wins. lzma.open
-    transparently handles multi-stream xz, so we just pickle.load until EOF.
+    Returns (data: dict, gate_idx: int | None, overrides: dict). If multiple
+    gate streams have been appended (e.g. via --relabel), the most recent one
+    wins. lzma.open transparently handles multi-stream xz, so we just
+    pickle.load until EOF.
     """
     objects = []
     with lzma.open(pkl_path, "rb") as f:
@@ -247,10 +248,38 @@ def _load_pkl_with_gate(pkl_path: Path):
         raise ValueError(f"no pickle objects in {pkl_path}")
     data = objects[0]
     gate_idx = None
+    overrides: dict = {}
     for obj in objects[1:]:
         if isinstance(obj, dict) and "gate_idx" in obj:
             gate_idx = int(obj["gate_idx"])
-    return data, gate_idx
+            overrides = obj.get("overrides") or {}
+    return data, gate_idx, overrides
+
+
+def _apply_overrides(raw_env, overrides: dict) -> None:
+    """Apply per-gate overrides written by dagger_label_gates.py.
+
+    Currently supports:
+      - force_pre_assemble_done: list of part indices → set part.pre_assemble_done=True.
+      - force_state: {part_idx: state_name} → set part._last_state.
+
+    By design (per user) we do NOT clear NM cycle counters, align_offset, or
+    any other part-internal cache: the overridden state is presumed not-yet-
+    reached, so its state-specific counters should already be at initial
+    defaults from the snapshot. If that assumption fails (e.g. user overrides
+    to a state that *was* visited earlier), choose a different override state
+    or extend this function.
+    """
+    if not overrides:
+        return
+    parts = raw_env.furnitures[0].parts
+    for pi in overrides.get("force_pre_assemble_done", []):
+        parts[pi].pre_assemble_done = True
+        print(f"    override: parts[{pi}].pre_assemble_done = True")
+    for pi, new_state in (overrides.get("force_state") or {}).items():
+        old = getattr(parts[pi], "_last_state", None)
+        parts[pi]._last_state = new_state
+        print(f"    override: parts[{pi}]._last_state = {new_state!r} (was {old!r})")
 
 
 def _snapshot_to_device(phys_cpu, parts, device):
@@ -290,7 +319,7 @@ def _scale_for_env(action, raw_env):
     )
 
 
-def run_expert_from_state(env, raw_env, phys_cpu, parts_cpu, max_steps: int, retry_seed: int):
+def run_expert_from_state(env, raw_env, phys_cpu, parts_cpu, max_steps: int, retry_seed: int, overrides: dict | None = None):
     """Restore to the snapshot, then roll out the scripted expert to terminal.
 
     Returns (success: bool, episode_data: dict). episode_data is ALWAYS returned
@@ -314,6 +343,9 @@ def run_expert_from_state(env, raw_env, phys_cpu, parts_cpu, max_steps: int, ret
 
     phys, parts = _snapshot_to_device(phys_cpu, parts_cpu, raw_env.device)
     restore(raw_env, phys, parts)
+    # Overrides must be applied AFTER restore() (which overwrites _last_state /
+    # pre_assemble_done with the snapshot values) and BEFORE the first FSM tick.
+    _apply_overrides(raw_env, overrides or {})
     _reset_step_counters(raw_env)
     raw_env.refresh()
     obs = raw_env._get_observation()
@@ -521,11 +553,11 @@ def main():
 
     for pi, fp in enumerate(candidates):
         print(f"\n[{pi + 1}/{len(candidates)}] {fp.name}")
-        fail_data, gate_idx = _load_pkl_with_gate(fp)
+        fail_data, gate_idx, overrides = _load_pkl_with_gate(fp)
         if gate_idx is None:
             print("  no gate stream found in pkl; skipping (mtime heuristic was wrong)")
             continue
-        print(f"  gate_idx={gate_idx}")
+        print(f"  gate_idx={gate_idx}" + (f"  overrides={overrides}" if overrides else ""))
 
         snaps = fail_data["snapshots"]
         if gate_idx >= len(snaps):
@@ -550,6 +582,7 @@ def main():
                 parts_cpu,
                 rollout_max_steps,
                 retry_seed,
+                overrides=overrides,
             )
 
             # ── Prepend pre-gate policy data so the gate window has the right history ──
@@ -589,6 +622,8 @@ def main():
             ep["dagger_origin"] = fp.name
             ep["dagger_gate_idx"] = gate_idx
             ep["dagger_iter"] = args.iter
+            if overrides:
+                ep["dagger_overrides"] = overrides
 
             ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
 

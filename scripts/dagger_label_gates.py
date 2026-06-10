@@ -372,7 +372,17 @@ def main() -> None:
                 overrides_dict = None
             else:
                 force_pad = _prompt_pre_assemble_done_overrides(n_parts=len(parts))
-                force_state = _prompt_state_overrides(parts, active_idx)
+                # Apply the pre_assemble_done overrides to a shallow-copied view
+                # of the parts so the active part is re-determined for the
+                # _last_state prompt (e.g. forcing parts[0] done shifts active
+                # to the next part in the assembly order).
+                effective_parts = [dict(p) for p in parts]
+                for pi in force_pad:
+                    effective_parts[pi]["pre_assemble_done"] = True
+                new_active_idx = _find_active_part_idx(effective_parts, assembled_set, should_be_assembled)
+                if force_pad and new_active_idx != active_idx:
+                    print(f"  -> active part shifts [{active_idx}] -> [{new_active_idx}] after force_pre_assemble_done={force_pad}")
+                force_state = _prompt_state_overrides(effective_parts, new_active_idx)
                 overrides_dict = {}
                 if force_pad:
                     overrides_dict["force_pre_assemble_done"] = force_pad

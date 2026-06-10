@@ -102,19 +102,55 @@ def _truncate_to(pkl_path: Path, target_size: int) -> None:
         f.truncate(target_size)
 
 
-def _load_snapshot_parts(pkl_path: Path, gate_idx: int):
-    """Load the failure pkl's first stream and return parts[0] at gate_idx.
+def _load_snapshot_at_gate(pkl_path: Path, gate_idx: int):
+    """Load the failure pkl's first stream and return (parts, assembled_set) at gate_idx.
 
-    Returns None if gate_idx is out of range or the pkl is malformed.
+    Returns (None, None) if gate_idx is out of range or the pkl is malformed.
     """
     with lzma.open(pkl_path, "rb") as f:
         data = pickle.load(f)  # first stream = main data; gate streams come after
     snapshots = data.get("snapshots", [])
     if not (0 <= gate_idx < len(snapshots)):
         print(f"    invalid gate_idx={gate_idx}: snapshot count is {len(snapshots)}")
+        return None, None
+    phys, parts = snapshots[gate_idx]
+    if not parts:
+        return None, None
+    assembled_sets = phys.get("assembled_sets", [set()])
+    return parts[0], set(assembled_sets[0])  # single-env failure pkls
+
+
+def _furniture_from_path(failure_dir: Path) -> str:
+    """Derive the furniture name from the failure dir's path.
+
+    Layout: <root>/raw/sim/<furniture>/<demo_source>/<randomness>/failure
+    """
+    return failure_dir.parents[2].name
+
+
+def _load_should_be_assembled(furniture_name: str):
+    """Return the furniture's should_be_assembled pair list (or None if unknown).
+
+    Mirrors `furniture_sim_env.py:1621` — the assembly order, not the part-index order,
+    determines which part the FSM works on next.
+    """
+    name_to_cls = {
+        "one_leg": ("one_leg", "OneLeg"),
+        "square_table": ("square_table", "SquareTable"),
+        "lamp": ("lamp", "Lamp"),
+        "round_table": ("round_table", "RoundTable"),
+        "desk": ("desk", "Desk"),
+        "cabinet": ("cabinet", "Cabinet"),
+        "chair": ("chair", "Chair"),
+        "stool": ("stool", "Stool"),
+        "drawer": ("drawer", "Drawer"),
+    }
+    if furniture_name not in name_to_cls:
+        print(f"  warning: no should_be_assembled mapping for furniture={furniture_name!r}; active-part marking disabled")
         return None
-    _phys, parts = snapshots[gate_idx]
-    return parts[0] if parts else None  # single-env failure pkls
+    mod_name, cls_name = name_to_cls[furniture_name]
+    mod = __import__(f"furniture_bench.furniture.{mod_name}", fromlist=[cls_name])
+    return getattr(mod, cls_name)().should_be_assembled
 
 
 def _part_class_for(part_name: str):
@@ -139,22 +175,37 @@ def _part_class_for(part_name: str):
     )
 
 
-def _display_snapshot_state(parts: list) -> None:
+def _find_active_part_idx(parts: list, assembled_set: set, should_be_assembled):
+    """Return the active part index, mirroring env logic at furniture_sim_env.py:1621-1648.
+
+    Walks `should_be_assembled` in order, skipping pairs already in
+    `assembled_set`; for the next unassembled pair (i, j), the active part is
+    parts[i] if it still needs pre-assembly, else parts[j]. Returns None when
+    all pairs are assembled or `should_be_assembled` is unavailable.
+    """
+    if not should_be_assembled:
+        return None
+    for i, j in should_be_assembled:
+        if (i, j) in assembled_set:
+            continue
+        if parts[i].get("pre_assemble_done") is False:
+            return i
+        return j
+    return None
+
+
+def _display_snapshot_state(parts: list, active_idx) -> None:
     """Print a per-part summary of the snapshotted FSM state at the gate.
 
-    The first part with pre_assemble_done=False is marked (ACTIVE), matching
-    the sequential-FSM convention (table_top pre-assembled first, then each
-    leg in order; the FSM works on the lowest-index not-yet-done part).
+    Marks the active part (the one the FSM is currently working on) with
+    `<- ACTIVE`. Active-part determination follows the env's logic — see
+    `_find_active_part_idx`.
     """
-    active_marked = False
     for i, p in enumerate(parts):
         name = p.get("name", "<unknown>")
         pad = p.get("pre_assemble_done", "?")
         ls = p.get("_last_state", "?")
-        marker = ""
-        if not active_marked and pad is False:
-            marker = "  <- ACTIVE"
-            active_marked = True
+        marker = "  <- ACTIVE" if i == active_idx else ""
         print(f"    parts[{i}]={name:30s}  pre_assemble_done={str(pad):5s}  _last_state={ls!r}{marker}")
 
 
@@ -188,36 +239,31 @@ def _prompt_pre_assemble_done_overrides(n_parts: int) -> list:
             print(f"    invalid ({e}); try again")
 
 
-def _prompt_state_overrides(parts: list) -> dict:
-    """Parse comma-separated 'idx=state' pairs; re-prompt on invalid input. Empty → {}."""
+def _prompt_state_overrides(parts: list, active_idx) -> dict:
+    """Override the ACTIVE part's _last_state with a state string. Empty → {}.
+
+    Only the active part's _last_state matters to the next FSM tick (the FSM
+    advances sequentially through assembly pairs and only reads _last_state
+    for the one currently being worked on), so we auto-target it instead of
+    asking for a part index.
+    """
+    if active_idx is None:
+        print("  (no active part; skipping _last_state override)")
+        return {}
+    part_name = parts[active_idx].get("name", "<unknown>")
+    current_state = parts[active_idx].get("_last_state", "?")
+    part_cls = _part_class_for(part_name)
     while True:
-        resp = input("  Set _last_state (format: idx=state, comma-sep, Enter=none): ").strip()
+        resp = input(
+            f"  Override active part [{active_idx}] {part_name!r} _last_state "
+            f"(current={current_state!r}, Enter=keep): "
+        ).strip()
         if not resp:
             return {}
-        try:
-            out: dict = {}
-            for tok in resp.split(","):
-                tok = tok.strip()
-                if not tok:
-                    continue
-                if "=" not in tok:
-                    raise ValueError(f"missing '=' in {tok!r}")
-                idx_s, state = tok.split("=", 1)
-                idx = int(idx_s.strip())
-                state = state.strip()
-                if not 0 <= idx < len(parts):
-                    raise ValueError(f"part index {idx} out of range [0, {len(parts) - 1}]")
-                part_name = parts[idx].get("name", "<unknown>")
-                part_cls = _part_class_for(part_name)
-                if state not in part_cls.ALL_STATES:
-                    raise ValueError(
-                        f"{state!r} is not a valid state for {part_name!r} "
-                        f"({part_cls.__name__}.ALL_STATES = {list(part_cls.ALL_STATES)})"
-                    )
-                out[idx] = state
-            return out
-        except ValueError as e:
-            print(f"    invalid ({e}); try again")
+        if resp not in part_cls.ALL_STATES:
+            print(f"    invalid: {resp!r} not in {part_cls.__name__}.ALL_STATES = {list(part_cls.ALL_STATES)}")
+            continue
+        return {active_idx: resp}
 
 
 def _prompt_gate(preview_name: str, can_undo: bool):
@@ -257,6 +303,10 @@ def main() -> None:
     if not failure_dir.exists():
         print(f"ERROR: {failure_dir} does not exist.")
         return
+
+    furniture_name = _furniture_from_path(failure_dir)
+    should_be_assembled = _load_should_be_assembled(furniture_name)
+    print(f"furniture={furniture_name}  should_be_assembled={should_be_assembled}")
 
     previews = sorted(failure_dir.glob("*.preview.mp4"))
     if not previews:
@@ -310,18 +360,19 @@ def main() -> None:
 
         # Load snapshot at this gate so we can display the FSM state and let
         # the user confirm or override. parts is the per-part list at the gate.
-        parts = _load_snapshot_parts(pkl, frame)
+        parts, assembled_set = _load_snapshot_at_gate(pkl, frame)
         if parts is None:
             print("  could not load snapshot; saving gate without overrides")
             overrides_dict = None
         else:
-            print(f"  Snapshot FSM state at gate={frame}:")
-            _display_snapshot_state(parts)
+            active_idx = _find_active_part_idx(parts, assembled_set, should_be_assembled)
+            print(f"  Snapshot FSM state at gate={frame}  (assembled_set={assembled_set or '{}'}):")
+            _display_snapshot_state(parts, active_idx)
             if _prompt_yes_no("Is this state correct?", default=True):
                 overrides_dict = None
             else:
                 force_pad = _prompt_pre_assemble_done_overrides(n_parts=len(parts))
-                force_state = _prompt_state_overrides(parts)
+                force_state = _prompt_state_overrides(parts, active_idx)
                 overrides_dict = {}
                 if force_pad:
                     overrides_dict["force_pre_assemble_done"] = force_pad

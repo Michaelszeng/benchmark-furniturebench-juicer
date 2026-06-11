@@ -71,7 +71,7 @@ else
 fi
 
 # Single base output dir shared across all checkpoints and horizons.
-BASE_OUT="outputs/${EXPERIMENT_NAME}"
+BASE_OUT="${OUTPUT_PREFIX:-outputs}/${EXPERIMENT_NAME}"
 echo "Base output directory: ${BASE_OUT}"
 echo "Checkpoints found: ${#CHECKPOINTS[@]}"
 

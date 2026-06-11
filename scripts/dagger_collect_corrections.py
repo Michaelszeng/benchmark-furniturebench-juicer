@@ -31,6 +31,8 @@ Usage:
     python scripts/dagger_collect_corrections.py --furniture one_leg --iter 0 --headless
 """
 
+from __future__ import annotations
+
 import argparse
 import datetime
 import lzma

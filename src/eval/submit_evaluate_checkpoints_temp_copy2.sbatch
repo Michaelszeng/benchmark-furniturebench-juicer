@@ -49,6 +49,13 @@ echo "ACTION_HORIZON: $ACTION_HORIZON"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/16_obs_one_leg_teleop_r3m_double_enc/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/20_obs_one_leg_teleop_r3m_double_enc/checkpoints"
 
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_teleop_r3m_cross_attn_double_enc_scripted_non_markovian_1000_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/4_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/8_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/12_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/16_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/20_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
+
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_100_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_200_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_400_eps/checkpoints"
@@ -73,6 +80,32 @@ echo "ACTION_HORIZON: $ACTION_HORIZON"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_non_markovian_dart_0_5_200_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_non_markovian_dart_1_0_200_eps/checkpoints"
 
+# furniture_bench_context_ablation
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/12_obs_one_leg_scripted_r3m_non_markovian_100_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/12_obs_one_leg_scripted_r3m_non_markovian_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/12_obs_one_leg_scripted_r3m_non_markovian_400_eps/checkpoints"
+
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/20_obs_one_leg_scripted_r3m_non_markovian_100_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/20_obs_one_leg_scripted_r3m_non_markovian_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/20_obs_one_leg_scripted_r3m_non_markovian_400_eps/checkpoints"
+
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/2_obs_one_leg_teleop_r3m_cross_attn_scripted_non_markovian_100_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/2_obs_one_leg_teleop_r3m_cross_attn_scripted_non_markovian_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/2_obs_one_leg_teleop_r3m_cross_attn_scripted_non_markovian_400_eps/checkpoints"
+
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/12_obs_one_leg_teleop_r3m_cross_attn_scripted_non_markovian_100_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/12_obs_one_leg_teleop_r3m_cross_attn_scripted_non_markovian_200_eps/checkpoints"
+CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/12_obs_one_leg_teleop_r3m_cross_attn_scripted_non_markovian_400_eps/checkpoints"
+
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/20_obs_one_leg_teleop_r3m_cross_attn_scripted_non_markovian_100_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/20_obs_one_leg_teleop_r3m_cross_attn_scripted_non_markovian_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench_context_ablation/20_obs_one_leg_teleop_r3m_cross_attn_scripted_non_markovian_400_eps/checkpoints"
+
+OUTPUT_PREFIX="outputs"
+if [[ "${CHECKPOINT_PATH}" == *"furniture_bench_context_ablation"* ]]; then
+    OUTPUT_PREFIX="outputs/context_ablation"
+fi
+
 TASK_TIMEOUT=""  # Leave empty to use sim_config["scripted_timeout"] / task_timeout fallback.
 # Auto-set TASK_TIMEOUT for teleop / non-markovian checkpoints (longer episodes).
 if [[ "${CHECKPOINT_PATH}" == *"teleop"* ]]; then
@@ -84,7 +117,7 @@ fi
 
 
 FURNITURE="one_leg"
-N_ENVS=32
+N_ENVS=8
 N_ROLLOUTS=500
 N_VIDEO_TRIALS=20
 # ============================================================================
@@ -137,9 +170,10 @@ echo "ACTION_HORIZON:  $ACTION_HORIZON"
 echo "N_ENVS:          $N_ENVS"
 echo "N_ROLLOUTS:      $N_ROLLOUTS"
 echo "TASK_TIMEOUT:    ${TASK_TIMEOUT:-(default)}"
+echo "OUTPUT_PREFIX:   $OUTPUT_PREFIX"
 echo "=========================================="
 
 TASK_TIMEOUT_ARG=()
 [[ -n "${TASK_TIMEOUT}" ]] && TASK_TIMEOUT_ARG=(--task-timeout "${TASK_TIMEOUT}")
 
-bash src/eval/evaluate_checkpoints.sh "${CHECKPOINT_PATH}" "${FURNITURE}" "${ACTION_HORIZON}" "${N_ENVS}" "${N_VIDEO_TRIALS}" "${N_ROLLOUTS}" --resume "${TASK_TIMEOUT_ARG[@]}"
+OUTPUT_PREFIX="${OUTPUT_PREFIX}" bash src/eval/evaluate_checkpoints.sh "${CHECKPOINT_PATH}" "${FURNITURE}" "${ACTION_HORIZON}" "${N_ENVS}" "${N_VIDEO_TRIALS}" "${N_ROLLOUTS}" --resume "${TASK_TIMEOUT_ARG[@]}"

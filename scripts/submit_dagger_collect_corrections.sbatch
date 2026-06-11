@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=dagger_corrections
 #SBATCH --account=locomotion
-#SBATCH --partition=vision-shared-rtx3090
+#SBATCH --partition=vision-shared-titanrtx
 #SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl
 #SBATCH --qos=shared-if-available
 #SBATCH --nodes=1
@@ -28,7 +28,7 @@
 FURNITURE="one_leg"
 # DEBUG flags (true/false). Both default false for normal training-data collection.
 DEBUG_FULL_ROLLOUT="false"     # save full policy rollout (option B) → correction_debug/
-SAVE_FAILED_ATTEMPTS="false"   # also save every failed expert attempt → correction[_debug]/failure/
+SAVE_FAILED_ATTEMPTS="true"    # also save every failed expert attempt → correction[_debug]/failure/
 # ========================================================================
 
 ITER="${1:?Usage: sbatch ... <iter> <action_horizon> <non_markovian> [instance_idx total_instances]}"
@@ -99,14 +99,36 @@ touch "${DONE_DIR}/${SLURM_JOB_ID:-$$}"
 N_DONE=$(ls "$DONE_DIR" 2>/dev/null | wc -l)
 echo "Job coordination: ${N_DONE} out of ${TOTAL_INSTANCES} parallel instances have completed their assigned slice of failures."
 
+ZARR_PATH="dataset/processed/sim/${FURNITURE}/${OUTPUT_NAME}/low/correction/success.zarr"
+TRANSLATED_ZARR_PATH="dataset/processed/sim/${FURNITURE}/${OUTPUT_NAME}/low/correction/success_translated.zarr"
+
 if [ "$N_DONE" -ge "$TOTAL_INSTANCES" ] && mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "==== [2/2] process_pickles.py (last instance, lock acquired) ===="
+    echo "==== [2/3] process_pickles.py (last instance, lock acquired) ===="
+    # Corrections are saved under {source}/{randomness}/correction/{outcome}, so
+    # `correction` lives in the randomness slot of get_raw_paths' glob, not the source.
     python -m src.data_processing.process_pickles \
-        --env sim --furniture "$FURNITURE" --randomness low --demo-outcome success \
-        --source "${DEMO_SOURCE}/correction" --output-name "$OUTPUT_NAME" --overwrite
+        --env sim --furniture "$FURNITURE" --randomness "low/correction" --demo-outcome success \
+        --source "${DEMO_SOURCE}" --output-name "$OUTPUT_NAME" --overwrite
+    PROCESS_RC=$?
+    if [ "$PROCESS_RC" -ne 0 ]; then
+        rm -rf "$DONE_DIR" "$LOCK_DIR"
+        echo "ERROR: process_pickles failed with exit code ${PROCESS_RC}; no zarr written."
+        exit "$PROCESS_RC"
+    fi
+    echo "done. Zarr: ${ZARR_PATH}"
+
+    echo "==== [3/3] process_zarr.py (translate to diffusion-policy ReplayBuffer format) ===="
+    # Training expects the ReplayBuffer layout (data/ + meta/ groups). Translate the
+    # process_pickles output into success_translated.zarr, which the training config consumes.
+    python src/data_processing/process_zarr.py "$ZARR_PATH" --overwrite
+    TRANSLATE_RC=$?
     rm -rf "$DONE_DIR" "$LOCK_DIR"
-    echo "done. Zarr: dataset/processed/sim/${FURNITURE}/${OUTPUT_NAME}/low/success.zarr"
+    if [ "$TRANSLATE_RC" -ne 0 ]; then
+        echo "ERROR: process_zarr failed with exit code ${TRANSLATE_RC}; translated zarr not written."
+        exit "$TRANSLATE_RC"
+    fi
+    echo "done. Translated zarr: ${TRANSLATED_ZARR_PATH}"
 else
-    echo "skipping process_pickles (not the last instance, or lost lock race)"
+    echo "skipping process_pickles/process_zarr (not the last instance, or lost lock race)"
 fi
 echo "$(date +'%F %T')  finished"

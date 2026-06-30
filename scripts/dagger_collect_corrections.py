@@ -427,7 +427,7 @@ def main():
     parser.add_argument("--iter", type=int, required=True, help="DAgger iteration whose failures we correct")
     parser.add_argument("--gpu-id", "-g", type=int, default=0)
     parser.add_argument("--headless", action="store_true")
-    parser.add_argument("--max-retries", type=int, default=4)
+    parser.add_argument("--max-retries", type=int, default=10)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument(
         "--non-markovian",

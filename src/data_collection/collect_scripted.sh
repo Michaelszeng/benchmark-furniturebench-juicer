@@ -1,5 +1,5 @@
 FURNITURE="one_leg"
-N_DEMOS=200
+N_DEMOS=100
 
 # $1: dart_amount
 # $2: suffix
@@ -17,7 +17,7 @@ CHUNK_SIZE=${3:-16}
 NON_MARKOVIAN=${4:-"False"}
 USE_DART=${5:-"False"}
 
-N_ENVS=8
+N_ENVS=4
 
 # SUFFIX=""  # manual override
 

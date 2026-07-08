@@ -5,13 +5,14 @@ NON_MARKOVIAN="True"
 
 # Hard-coded flag that selects scripted_dart.py + process_pickles_dart.py when "True",
 # scripted.py + process_pickles.py when "False".  Independent of DART_AMOUNT.
-USE_DART="True"
+USE_DART="False"
 
 declare -A DART_SUFFIXES=(
     # ["0.0"]="0"
-    # ["0.0625"]="0_0625"
-    # ["0.125"]="0_125"
-    # ["0.25"]="0_25"
+    ["0.03125"]="0_03125"
+    ["0.0625"]="0_0625"
+    ["0.125"]="0_125"
+    ["0.25"]="0_25"
     ["0.5"]="0_5"
     # ["1.0"]="1_0"
 )

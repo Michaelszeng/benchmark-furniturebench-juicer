@@ -31,8 +31,31 @@
 # CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_200_eps/checkpoints/epoch=050-val_loss=0.0076-val_ddim_mse=0.003549.ckpt"
 
 # Ta = 6,10,15
-CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_200_eps/checkpoints/epoch=115-val_loss=0.0089-val_ddim_mse=0.004272.ckpt"
+# CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_scripted_r3m_200_eps/checkpoints/epoch=115-val_loss=0.0089-val_ddim_mse=0.004272.ckpt"
 
+# MARKOVIAN ITERATION 2
+# Ta = 1
+# CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter0_ah1/checkpoints/epoch=000-val_loss=0.0088-val_ddim_mse=0.005211.ckpt"
+# Ta = 3
+# CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter0_ah3/checkpoints/epoch=020-val_loss=0.0075-val_ddim_mse=0.003777.ckpt"
+# # Ta = 6
+# CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter0_ah6/checkpoints/epoch=020-val_loss=0.0091-val_ddim_mse=0.003123.ckpt"
+# # Ta = 10
+# CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter0_ah10/checkpoints/epoch=020-val_loss=0.0083-val_ddim_mse=0.004892.ckpt"
+# # Ta = 15
+# CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter0_ah15/checkpoints/epoch=020-val_loss=0.0101-val_ddim_mse=0.002544.ckpt"
+
+# MARKOVIAN ITERATION 3
+# Ta = 1
+# CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter1_ah1/checkpoints/epoch=015-val_loss=0.0085-val_ddim_mse=0.003823.ckpt"
+# Ta = 3
+# CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter1_ah3/checkpoints/epoch=015-val_loss=0.0072-val_ddim_mse=0.003013.ckpt"
+# Ta = 6
+# CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter1_ah6/checkpoints/epoch=025-val_loss=0.0102-val_ddim_mse=0.002731.ckpt"
+# Ta = 10
+# CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter1_ah10/checkpoints/epoch=025-val_loss=0.0101-val_ddim_mse=0.004231.ckpt"
+# Ta = 15
+# CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter1_ah15/checkpoints/epoch=025-val_loss=0.0123-val_ddim_mse=0.003689.ckpt"
 
 # NON-MARKOVIAN ITERATION 1
 # Ta = 1,2

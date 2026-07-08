@@ -157,10 +157,10 @@ def collect_best_results(experiment_paths: Sequence[Path]) -> List[CheckpointRes
             print(f"  Skipping {experiment_path.name}: no valid results.pkl found.")
             continue
 
-        # Pick the checkpoint with the most trials, then highest success rate
-        max_trials = max(c.num_trials for c in candidates)
-        top = [c for c in candidates if c.num_trials == max_trials]
-        best = max(top, key=lambda c: c.success_rate)
+        # Consider every checkpoint with valid results (any number of trials).
+        # Pick the highest success rate, breaking ties by number of trials.
+        # Useful to plot intermediate results before an evaluation run is finished.
+        best = max(candidates, key=lambda c: (c.success_rate, c.num_trials))
         best.num_checkpoints_available = len(candidates)
         best.all_checkpoint_trials = [c.num_trials for c in candidates]
         results.append(best)

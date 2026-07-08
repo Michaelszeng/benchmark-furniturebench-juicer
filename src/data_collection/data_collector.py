@@ -156,7 +156,7 @@ class DataCollector:
     # ------------------------------------------------------------------
 
     def _make_empty_buffers(self):
-        return dict(obs=[], org_obs=[], acts=[], rews=[], skills=[], step_counter=0, last_reward_idx=-1, skill_set=[])
+        return dict(obs=[], acts=[], rews=[], skills=[], step_counter=0, last_reward_idx=-1, skill_set=[])
 
     def _reset_all_buffers(self):
         self._bufs = [self._make_empty_buffers() for _ in range(self.num_envs)]
@@ -206,7 +206,6 @@ class DataCollector:
     def _store_step(self, env_idx: int, obs_np: dict, record_action, rew_val: float, skill_val):
         """Append one (obs, action, reward, skill) tuple to env_idx's buffer."""
         buf = self._bufs[env_idx]
-        buf["org_obs"].append(obs_np.copy())
         ob = {k: obs_np[k] for k in ["color_image1", "color_image2", "robot_state", "parts_poses"]}
         buf["obs"].append(ob)
         if isinstance(record_action, torch.Tensor):
@@ -222,7 +221,6 @@ class DataCollector:
         """Append the terminal (post-done) obs to env_idx's buffer."""
         obs_np = self._obs_to_numpy(obs, env_idx)
         buf = self._bufs[env_idx]
-        buf["org_obs"].append(obs_np)
         ob = {k: obs_np[k] for k in ["color_image1", "color_image2", "robot_state", "parts_poses"]}
         buf["obs"].append(ob)
 

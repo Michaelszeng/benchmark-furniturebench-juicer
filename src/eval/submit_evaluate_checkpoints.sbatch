@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=evaluate_checkpoints
-#SBATCH --account=locomotion
-#SBATCH --partition=vision-shared-rtx3090
-#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl,improbablex002
-#SBATCH --qos=shared-if-available
+#SBATCH --account=<>
+#SBATCH --partition=<>
+#SBATCH --exclude=<>
+#SBATCH --qos=<>
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
@@ -48,6 +48,13 @@ echo "ACTION_HORIZON: $ACTION_HORIZON"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/12_obs_one_leg_teleop_r3m_double_enc/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/16_obs_one_leg_teleop_r3m_double_enc/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/20_obs_one_leg_teleop_r3m_double_enc/checkpoints"
+
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_teleop_r3m_cross_attn_double_enc_scripted_non_markovian_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/4_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/8_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/12_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/16_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/20_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_200_eps/checkpoints"
 
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/2_obs_one_leg_teleop_r3m_cross_attn_double_enc_scripted_non_markovian_1000_eps/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/4_obs_one_leg_teleop_r3m_double_enc_scripted_non_markovian_1000_eps/checkpoints"
@@ -114,7 +121,7 @@ echo "ACTION_HORIZON: $ACTION_HORIZON"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter1_ah10/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter1_ah15/checkpoints"
 
-CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter2_ah1/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter2_ah1/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter2_ah3/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter2_ah6/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter2_ah10/checkpoints"
@@ -138,6 +145,31 @@ CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/out
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_non_markovian_dagger_iter2_ah10/checkpoints"
 # CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_non_markovian_dagger_iter2_ah15/checkpoints"
 
+# Noise Injection Experiments
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_noise_0_200_eps/checkpoints"
+
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_1_noise_0_5_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_1_noise_0_25_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_1_noise_0_125_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_1_noise_0_0625_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_1_noise_0_03125_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_2_noise_0_5_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_2_noise_0_25_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_2_noise_0_125_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_2_noise_0_0625_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_2_noise_0_03125_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_3_noise_0_5_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_3_noise_0_25_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_3_noise_0_125_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_3_noise_0_0625_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_3_noise_0_03125_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_4_noise_0_5_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_4_noise_0_25_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_4_noise_0_125_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_4_noise_0_0625_200_eps/checkpoints"
+# CHECKPOINT_PATH="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/noise_injection/1_obs_one_leg_scripted_r3m_non_markovian_alpha_0_4_noise_0_03125_200_eps/checkpoints"
+
+
 
 OUTPUT_PREFIX="outputs"
 if [[ "${CHECKPOINT_PATH}" == *"furniture_bench_context_ablation"* ]]; then
@@ -155,7 +187,7 @@ fi
 
 
 FURNITURE="one_leg"
-N_ENVS=8
+N_ENVS=16
 N_ROLLOUTS=500
 N_VIDEO_TRIALS=20
 # ============================================================================

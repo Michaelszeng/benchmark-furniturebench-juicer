@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=dagger_failures
-#SBATCH --account=locomotion
-#SBATCH --partition=vision-shared-rtx3090
-#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl,improbablex002
-#SBATCH --qos=shared-if-available
+#SBATCH --account=<>
+#SBATCH --partition=<>
+#SBATCH --exclude=<>
+#SBATCH --qos=<>
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
@@ -56,6 +56,8 @@
 # CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter1_ah10/checkpoints/epoch=025-val_loss=0.0101-val_ddim_mse=0.004231.ckpt"
 # Ta = 15
 # CHECKPOINT="/data/locomotion/michzeng/diffusion-policy-experiments/data/outputs/furniture_bench/DAgger/2_obs_one_leg_scripted_r3m_dagger_iter1_ah15/checkpoints/epoch=025-val_loss=0.0123-val_ddim_mse=0.003689.ckpt"
+
+
 
 # NON-MARKOVIAN ITERATION 1
 # Ta = 1,2

@@ -26,10 +26,11 @@ Non-Markovian (left, navy) vs Markovian (right, red), each overlaying DAgger ite
            outputs/2_obs_one_leg_scripted_r3m_dagger_iter1_ah1 outputs/2_obs_one_leg_scripted_r3m_dagger_iter1_ah3 outputs/2_obs_one_leg_scripted_r3m_dagger_iter1_ah6 outputs/2_obs_one_leg_scripted_r3m_dagger_iter1_ah10 outputs/2_obs_one_leg_scripted_r3m_dagger_iter1_ah15 \
        --right-path \
            outputs/2_obs_one_leg_scripted_r3m_dagger_iter2_ah1 outputs/2_obs_one_leg_scripted_r3m_dagger_iter2_ah3 outputs/2_obs_one_leg_scripted_r3m_dagger_iter2_ah6 outputs/2_obs_one_leg_scripted_r3m_dagger_iter2_ah10 outputs/2_obs_one_leg_scripted_r3m_dagger_iter2_ah15 \
-       --left-name "Non-Markovian Expert" \
-       --right-name "Markovian Expert" \
+       --left-name "Scripted Non-Markovian Expert" \
+       --right-name "Scripted Markovian Expert" \
        --labels "Baseline" "iter 1" "iter 2" "iter 3" \
-       --output outputs/plots/comparison_dagger_non_markovian_vs_markovian_one_leg.png
+       --reverse-legend \
+       --output outputs/plots/comparison_dagger_non_markovian_vs_markovian_one_leg_v2.png
 
 Don't set --output to skip saving. Set --show to open an interactive window.
 """
@@ -128,6 +129,7 @@ def _draw_panel(
     traces: Sequence[Tuple[str, Sequence[CheckpointResult]]],
     base_color: str,
     title: str,
+    reverse_legend: bool = False,
 ) -> None:
     """Draw one panel that may overlay several success-rate traces onto `ax`."""
     ax.set_facecolor("white")
@@ -177,9 +179,12 @@ def _draw_panel(
     ax.tick_params(axis="y", which="major", pad=3)
 
     if len(traces) > 1:
-        ax.legend(loc="upper right", fontsize=LEGEND_FS, framealpha=0.9, edgecolor="#4f4f4f",
-                  handlelength=1.4, handletextpad=0.4, labelspacing=0.3, borderpad=0.4,
-                  borderaxespad=0.3)
+        handles, labels = ax.get_legend_handles_labels()
+        if reverse_legend:
+            handles, labels = handles[::-1], labels[::-1]
+        ax.legend(handles, labels, loc="upper right", fontsize=LEGEND_FS, framealpha=0.9,
+                  edgecolor="#4f4f4f", handlelength=1.4, handletextpad=0.4, labelspacing=0.3,
+                  borderpad=0.4, borderaxespad=0.3)
 
 
 def make_comparison_plot(
@@ -191,6 +196,7 @@ def make_comparison_plot(
     plot_name: Optional[str] = None,
     left_color: str = NAVY,
     right_color: str = DARK_RED,
+    reverse_legend: bool = False,
 ) -> plt.Figure:
     # sharex=False / sharey=False keeps the two panels' axes fully independent.
     # constrained_layout snugly packs the shared super-labels against the axes,
@@ -202,8 +208,8 @@ def make_comparison_plot(
     # Trim the padding between the axes/labels and the figure edge.
     fig.get_layout_engine().set(w_pad=0.02, h_pad=0.02, wspace=0.03, hspace=0.03)
 
-    _draw_panel(ax_left, left, left_color, left_name)
-    _draw_panel(ax_right, right, right_color, right_name)
+    _draw_panel(ax_left, left, left_color, left_name, reverse_legend=reverse_legend)
+    _draw_panel(ax_right, right, right_color, right_name, reverse_legend=reverse_legend)
 
     # Shared axis titles: one x-label centered under both panels, one y-label at left.
     fig.supxlabel("Execution Horizon (steps)", fontsize=AXIS_TITLE_FS)
@@ -243,6 +249,8 @@ def parse_args() -> argparse.Namespace:
                         help=f"Base color for the left panel's shade family ({preset_help}; default {NAVY}).")
     parser.add_argument("--right-color", type=str, default=DARK_RED,
                         help=f"Base color for the right panel's shade family ({preset_help}; default {DARK_RED}).")
+    parser.add_argument("--reverse-legend", action="store_true",
+                        help="Flip the order of legend entries in both panels.")
     parser.add_argument("--plot-name", type=str, default=None, help="Overall figure title.")
     parser.add_argument("--output", type=Path, default=None,
                         help="Path to save the figure (PNG, PDF, etc.). Omit to skip saving.")
@@ -322,6 +330,7 @@ def main() -> None:
     fig = make_comparison_plot(
         left, right, left_name, right_name, dpi=args.dpi, plot_name=args.plot_name,
         left_color=args.left_color, right_color=args.right_color,
+        reverse_legend=args.reverse_legend,
     )
 
     if args.output is not None:

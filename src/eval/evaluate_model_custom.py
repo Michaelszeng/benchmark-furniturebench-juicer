@@ -43,8 +43,38 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 # filter_and_concat_robot_state / ROBOT_STATES in furniture_bench.
 _ROBOT_STATE_KEYS = ["ee_pos", "ee_quat", "ee_pos_vel", "ee_ori_vel", "gripper_width"]
 
+# After proprioceptive_quat_to_6d_rotation, robot_state is a 16-D vector laid out as:
+#     ee_pos        -> indices 0:3
+#     ee_ori_6d     -> indices 3:9
+#     ee_pos_vel    -> indices 9:12   (linear velocity)
+#     ee_ori_vel    -> indices 12:15  (angular velocity)
+#     gripper_width -> index  15
+# The `remove_velocities` training option (FurnitureBenchDataset.remove_velocities)
+# strips the contiguous velocity block [9, 15), leaving a 10-D vector
+# [ee_pos (3), ee_ori_6d (6), gripper_width (1)].  Keep these constants in sync with
+# diffusion_policy/dataset/furniture_bench_dataset.py.
+_ROBOT_STATE_DIM = 16
+_ROBOT_STATE_VEL_START = 9
+_ROBOT_STATE_VEL_END = 15
 
-def preprocess_obs(obs: dict, device: torch.device, obs_keys: set) -> dict:
+
+def _strip_robot_state_velocities(robot_state: torch.Tensor) -> torch.Tensor:
+    """Drop the velocity components (indices 9..14) from a 16-D robot_state tensor.
+
+    Mirrors FurnitureBenchDataset._strip_velocities so that eval-time observations
+    match the proprioception layout the policy/normalizer were trained on when
+    ``remove_velocities=True``. Slices the last axis; any number of leading dims OK.
+    """
+    assert robot_state.shape[-1] == _ROBOT_STATE_DIM, (
+        f"Expected {_ROBOT_STATE_DIM}D robot_state to strip velocities, "
+        f"got shape {tuple(robot_state.shape)}"
+    )
+    before = robot_state[..., :_ROBOT_STATE_VEL_START]
+    after = robot_state[..., _ROBOT_STATE_VEL_END:]
+    return torch.cat([before, after], dim=-1)
+
+
+def preprocess_obs(obs: dict, device: torch.device, obs_keys: set, remove_velocities: bool = False) -> dict:
     """
     Handles both image-based policies (color_image1, color_image2, robot_state)
     and state-based policies (robot_state, parts_poses).
@@ -57,12 +87,18 @@ def preprocess_obs(obs: dict, device: torch.device, obs_keys: set) -> dict:
         obs: raw observation dict from env.step / env.reset.
         device: torch device to move tensors to.
         obs_keys: set of observation key names the policy expects
-                  (from cfg.shape_meta.obs).
+                      (from cfg.shape_meta.obs).
+        remove_velocities: if True, strip the EE velocity components from
+                      robot_state to match a policy trained with
+                      remove_velocities=True (16-D -> 10-D).
     """
     rs = obs["robot_state"]
     if isinstance(rs, dict):
         rs = torch.cat([rs[k] for k in _ROBOT_STATE_KEYS], dim=-1)
-    result = {"robot_state": proprioceptive_quat_to_6d_rotation(rs.float().to(device))}
+    robot_state = proprioceptive_quat_to_6d_rotation(rs.float().to(device))
+    if remove_velocities:
+        robot_state = _strip_robot_state_velocities(robot_state)
+    result = {"robot_state": robot_state}
     if "color_image1" in obs_keys:
         # resize() matches data_collector.py: 1280x720 → 320x240, same FOV.
         result["color_image1"] = resize(obs["color_image1"]).float().to(device)
@@ -178,6 +214,7 @@ def run_rollout(
     obs_keys: set,
     record_video: bool = False,
     n_action_steps: int = None,
+    remove_velocities: bool = False,
 ) -> dict:
     """Run one round of parallel rollouts.
 
@@ -191,7 +228,7 @@ def run_rollout(
     """
     n_envs = env.num_envs
     obs = env.reset()
-    preprocessed = preprocess_obs(obs, device, obs_keys)
+    preprocessed = preprocess_obs(obs, device, obs_keys, remove_velocities)
     obs_deque = collections.deque([preprocessed] * n_obs_steps, maxlen=n_obs_steps)
     action_queue: collections.deque = collections.deque()
 
@@ -236,7 +273,7 @@ def run_rollout(
         newly_done = done.squeeze(-1) & (done_step == -1)
         done_step[newly_done] = step
 
-        preprocessed = preprocess_obs(obs, device, obs_keys)
+        preprocessed = preprocess_obs(obs, device, obs_keys, remove_velocities)
 
         if record_video:
             if "color_image1" in preprocessed:
@@ -363,6 +400,17 @@ if __name__ == "__main__":
     is_image_based = "color_image1" in policy_obs_keys
     print(f"Policy type: {'image-based' if is_image_based else 'state-based'} (obs keys: {sorted(policy_obs_keys)})")
 
+    # Detect whether the policy was trained with remove_velocities=True (which strips
+    # the EE velocity block from the 16-D robot_state down to 10-D). If so, apply the
+    # same slicing at eval time so observations match the normalizer/encoder.
+    remove_velocities = bool(OmegaConf.select(cfg, "task.dataset.remove_velocities", default=False))
+    if remove_velocities:
+        stripped_dim = _ROBOT_STATE_DIM - (_ROBOT_STATE_VEL_END - _ROBOT_STATE_VEL_START)
+        print(
+            f"Detected remove_velocities=True in checkpoint config: stripping robot_state "
+            f"velocities ({_ROBOT_STATE_DIM}D -> {stripped_dim}D)"
+        )
+
     if args.task_timeout is not None:
         rollout_max_steps = args.task_timeout
     else:
@@ -461,6 +509,7 @@ if __name__ == "__main__":
             obs_keys=policy_obs_keys,
             record_video=record_this_round,
             n_action_steps=n_action_steps,
+            remove_velocities=remove_velocities,
         )
         rollout_time = time.time() - t_start
 

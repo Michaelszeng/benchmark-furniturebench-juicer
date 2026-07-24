@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=dagger_corrections
-#SBATCH --account=locomotion
-#SBATCH --partition=vision-shared-rtx3090
-#SBATCH --exclude=freeman-titanrtx-2,freeman-titanrtx-1,gpu20-2.drl,improbablex002
-#SBATCH --qos=shared-if-available
+#SBATCH --account=<>
+#SBATCH --partition=<>
+#SBATCH --exclude=<>
+#SBATCH --qos=<>
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1

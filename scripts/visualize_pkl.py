@@ -197,7 +197,8 @@ def main():
             f"{'SUCCESS' if success else 'FAILURE'}  |  "
             f"{pkl_files[ep_idx].name}"
         )
-        cv2.putText(display, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(display, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(display, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.imshow("PKL Viewer", display)
 
         wait_ms = frame_delay_ms if playing else 0

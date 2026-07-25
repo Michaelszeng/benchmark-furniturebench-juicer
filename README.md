@@ -1,6 +1,6 @@
 # FurnitureBench: Furniture Assembly Benchmark
 
-This repo is a fork of the [FurnitureBench](https://github.com/clvrai/furniture-bench) (in particular a fork of it: [JUICER](https://github.com/ankile/imitation-juicer)).
+This repo is a fork of the [FurnitureBench](https://github.com/clvrai/furniture-bench) (specifically, a fork of it: [JUICER](https://github.com/ankile/imitation-juicer)).
 
 This fork contains unique features:
  - Scripted Markovian expert for automated data collection on the `one_leg` task

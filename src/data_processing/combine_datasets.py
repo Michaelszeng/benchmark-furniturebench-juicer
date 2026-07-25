@@ -1,7 +1,8 @@
-from datetime import datetime
-import zarr
-import numpy as np
 from collections import defaultdict
+from datetime import datetime
+
+import numpy as np
+import zarr
 from tqdm import tqdm
 
 
@@ -32,9 +33,8 @@ def combine_datasets(data_paths, output_path):
 
 if __name__ == "__main__":
     data_paths = [
-        "/data/scratch/ankile/furniture-data/data/processed/sim/feature/vip/one_leg/data.zarr",
-        "/data/scratch/ankile/furniture-data/data/processed/sim/feature/vip/lamp/data.zarr",
-        "/data/scratch/ankile/furniture-data/data/processed/sim/feature/vip/round_table/data.zarr",
+        "*.zarr",
+        "*.zarr",
     ]
-    output_path = "/data/scratch/ankile/furniture-data/data/processed/sim/feature/vip/combined.zarr"
+    output_path = "combined.zarr"
     combine_datasets(data_paths, output_path)

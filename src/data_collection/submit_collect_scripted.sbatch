@@ -15,15 +15,13 @@
 #SBATCH --requeue
 
 # Usage:
-#   sbatch src/data_collection/submit_collect_scripted.sbatch [dart_amount [suffix [chunk_size [non_markovian [use_dart]]]]]
+#   sbatch src/data_collection/submit_collect_scripted.sbatch [dart_amount [suffix [non_markovian [n_demos]]]]
 #
 # Arguments (all optional, positional):
 #   $1  dart_amount    — e.g. 0.125
 #   $2  suffix         — e.g. 0_125
-#   $3  chunk_size     — e.g. 16 (default: 16; scripted_dart only)
-#   $4  non_markovian  — True or False (default: False)
-#   $5  use_dart       — True or False (default: False); selects scripted_dart.py +
-#                        process_pickles_dart.py vs scripted.py + process_pickles.py
+#   $3  non_markovian  — True or False (default: False)
+#   $4  n_demos        — number of successful demos to collect (default: 100)
 #
 # SLURM runner for `collect_scripted.sh`.
 
@@ -40,21 +38,28 @@ echo "SLURM_SUBMIT_DIR: $SLURM_SUBMIT_DIR"
 # --- Environment setup ---
 echo "Changing directory to $SLURM_SUBMIT_DIR"
 cd "$SLURM_SUBMIT_DIR" || { echo "Failed to change directory to $SLURM_SUBMIT_DIR"; exit 1; }
+
+# Root directory containing this user's miniconda/mamba installs on the cluster.
+# Defaults to the submitting shell's $HOME; override by exporting CLUSTER_USER_HOME
+# before submitting if your cluster's compute nodes don't share your login $HOME, e.g.:
+#   CLUSTER_USER_HOME=/data/locomotion/$USER sbatch ...
+CLUSTER_USER_HOME="${CLUSTER_USER_HOME:-$HOME}"
+
 # Conda setup
-source /data/locomotion/michzeng/miniconda3/etc/profile.d/conda.sh
-conda activate py38
+source "${CLUSTER_USER_HOME}/miniconda3/etc/profile.d/conda.sh"
+conda activate imitation-juicer
 
 mkdir -p logs
 
 export PYTHONPATH=$PWD:$PYTHONPATH
 export PHYSX_MAX_GPU_CONTACT_PAIRS=$((1024 * 1024 * 32))
 
-export HOME=/data/locomotion/michzeng
+export HOME="${CLUSTER_USER_HOME}"
 
 # IsaacGym's native extension links against libpython3.8.so.1.0 at the C level.
 # The conda activate step does not add the env's lib/ to LD_LIBRARY_PATH, so the
 # dynamic linker can't find the library unless we set it explicitly.
-export LD_LIBRARY_PATH=/data/locomotion/michzeng/mamba/envs/py38/lib:${LD_LIBRARY_PATH:-}
+export LD_LIBRARY_PATH="${CLUSTER_USER_HOME}/mamba/envs/imitation-juicer/lib:${LD_LIBRARY_PATH:-}"
 
 # Force the Vulkan loader to only see NVIDIA's ICD on this node. The system
 # has 6 ICDs installed (intel_icd, intel_hasvk, radeon, lvp/lavapipe, virtio,

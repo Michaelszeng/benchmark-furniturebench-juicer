@@ -5,7 +5,7 @@
 The codebase uses factory functions to select implementations from config strings, keeping
 training scripts free of conditional logic.
 
-**get_actor** — `src/behavior/__init__.py:7`
+**get_actor** — `src/training/behavior/__init__.py:7`
 - Takes `(config, normalizer, device)`, reads `config.actor.name` to dispatch to
   `MLPActor`, `RNNActor`, `DiffusionPolicy`, `MultiTaskDiffusionPolicy`, or
   `SuccessGuidedDiffusionPolicy`.
@@ -14,13 +14,13 @@ training scripts free of conditional logic.
 **get_env** — `src/gym/__init__.py`
 - Wraps `FurnitureSimEnv` with the appropriate task/randomness config.
 
-Usage pattern in `src/train/bc.py`: construct normalizer → call `get_actor(config, normalizer, device)`.
+Usage pattern in `src/training/train/bc.py`: construct normalizer → call `get_actor(config, normalizer, device)`.
 
 ---
 
 ## 2. Actor Class Hierarchy with PostInitCaller Metaclass
 
-**Definition:** `src/behavior/base.py:19-43`
+**Definition:** `src/training/behavior/base.py:19-43`
 
 ```python
 class PostInitCaller(type(torch.nn.Module)):
@@ -48,7 +48,7 @@ observation dict before passing it to the policy network.
 Every `Actor` instance holds two camera transforms and two encoder pairs:
 
 ```python
-# src/behavior/base.py:41-48
+# src/training/behavior/base.py:41-48
 camera1_transform = WristCameraTransform(mode="eval")   # wrist cam
 camera2_transform = FrontCameraTransform(mode="eval")   # front cam
 encoder1: nn.Module        # encodes wrist image
@@ -82,23 +82,23 @@ PyTorch train/eval flag, so the forward pass automatically applies the right pip
 
 ## 5. Decoupled Normalizer Design
 
-**Base class:** `src/dataset/normalizer.py:10`
+**Base class:** `src/training/dataset/normalizer.py:10`
 - Inherits `nn.Module`; stores stats as `nn.ParameterDict` (non-trainable).
 - `forward(x, key, forward=True)` handles numpy↔tensor conversion transparently.
 - `_normalize` / `_denormalize` are abstract — subclasses implement these.
 
-**`LinearNormalizer`** — `src/dataset/normalizer.py:119`
+**`LinearNormalizer`** — `src/training/dataset/normalizer.py:119`
 - Scales to `[-1, 1]` using min/max stats from `get_data_stats()`.
 - `_normalize`: `2 * (x - min) / (max - min) - 1`
 - `_denormalize`: inverse of above.
 
-**`GaussianNormalizer`** — `src/dataset/normalizer.py:146`
+**`GaussianNormalizer`** — `src/training/dataset/normalizer.py:146`
 - Z-score normalization using mean/std stats.
 
 The action key is remapped: whichever of `action/pos` or `action/delta` matches
 `control_mode` is stored as `"action"` in the stats dict.
 
-Normalizers are constructed in `src/train/bc.py` and passed into `get_actor()`.
+Normalizers are constructed in `src/training/train/bc.py` and passed into `get_actor()`.
 
 ---
 
@@ -125,7 +125,7 @@ Never construct data paths by hand — always use these functions to ensure cons
 
 ## 7. Hydra Config Composition
 
-Entry point: `src/train/bc.py` uses `@hydra.main(config_path="../config", config_name="base")`.
+Entry point: `src/training/train/bc.py` uses `@hydra.main(config_path="../../config", config_name="base")`.
 
 **Base config:** `src/config/base.yaml` — defines top-level structure. `furniture` key
 is `???` (required, must be provided on CLI).
@@ -137,7 +137,7 @@ is `???` (required, must be provided on CLI).
 
 **Override pattern:**
 ```
-python -m src.train.bc +experiment=image_baseline furniture=one_leg actor.lr=1e-4
+python -m src.training.train.bc +experiment=image_baseline furniture=one_leg actor.lr=1e-4
 ```
 
 `+experiment=` appends the experiment group defaults on top of base config.
@@ -172,14 +172,14 @@ Final zarr layout:
 └── actions             # (N, action_dim) float32
 ```
 
-`FurnitureImageDataset` (`src/dataset/`) reads from zarr with a sliding window to
+`FurnitureImageDataset` (`src/training/dataset/`) reads from zarr with a sliding window to
 produce `(obs_horizon, action_horizon)` samples.
 
 ---
 
 ## 9. FixedStepsDataloader
 
-**Definition:** `src/dataset/dataloader.py:5`
+**Definition:** `src/training/dataset/dataloader.py:5`
 
 ```python
 class FixedStepsDataloader(torch.utils.data.DataLoader):
@@ -213,7 +213,7 @@ Isaac quat (x,y,z,w) → PyTorch3D quat (w,x,y,z) → rotation matrix → 6D
 ```
 via `isaac_quat_to_rot_6d` at `src/common/geometry.py:24`.
 
-The `proprioceptive_quat_to_6d_rotation` function (imported in `src/behavior/base.py:8`)
+The `proprioceptive_quat_to_6d_rotation` function (imported in `src/training/behavior/base.py:8`)
 applies this conversion to the robot state inside `_normalized_obs`.
 
 **Why 6D?** The 6D representation is continuous and avoids gimbal lock and quaternion

@@ -53,6 +53,14 @@ Multiple experiments with custom legend labels:
     --plot-name '1-obs' \
     --output outputs/plots/1_obs_test.png
 
+    python src/eval/plot_eval_results.py \
+    --experiment-path /data/locomotion/michzeng/ManiSkill/outputs/2_obs_human_expert_attention_double_enc /data/locomotion/michzeng/ManiSkill/outputs/4_obs_human_expert_attention_double_enc /data/locomotion/michzeng/ManiSkill/outputs/8_obs_human_expert_attention_double_enc /data/locomotion/michzeng/ManiSkill/outputs/12_obs_human_expert_attention_double_enc /data/locomotion/michzeng/ManiSkill/outputs/16_obs_human_expert_attention_double_enc /data/locomotion/michzeng/ManiSkill/outputs/20_obs_human_expert_attention_double_enc \
+    --experiment-name '$T_o=2$' '$T_o=4$' '$T_o=8$' '$T_o=12$' '$T_o=16$' '$T_o=20$' \
+    --legend-loc upper-right \
+    --fig-width 3.2 \
+    --fig-height 2.0 \
+    --output outputs/plots/comparison_context_length_double_enc_pusht_m.png
+
 Don't set --output to skip saving. Set --show to open an interactive window.
 """
 
@@ -431,10 +439,11 @@ def make_plot(
     plot_name: Optional[str] = None,
     legend_loc: Optional[str] = None,
     fig_width: Optional[float] = None,
+    fig_height: Optional[float] = None,
     y_min: Optional[float] = None,
 ) -> plt.Figure:
     # constrained_layout snugly packs the axis titles against the axes.
-    fig, ax = plt.subplots(figsize=(fig_width or FIG_WIDTH_IN, FIG_HEIGHT_IN), layout="constrained")
+    fig, ax = plt.subplots(figsize=(fig_width or FIG_WIDTH_IN, fig_height or FIG_HEIGHT_IN), layout="constrained")
     # Minimize the padding between the axes/labels and the figure edge.
     fig.get_layout_engine().set(w_pad=0.0, h_pad=0.0, wspace=0.0, hspace=0.0)
     ax.set_facecolor("white")
@@ -530,6 +539,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dpi", type=int, default=300, help="Figure DPI when saving to disk.")
     parser.add_argument("--fig-width", type=float, default=None,
                         help=f"Figure width in inches (default: {FIG_WIDTH_IN}).")
+    parser.add_argument("--fig-height", type=float, default=None,
+                        help=f"Figure height in inches (default: {FIG_HEIGHT_IN}).")
     parser.add_argument("--y-min", type=float, default=None,
                         help="Lower limit for the y-axis (default: matplotlib auto).")
     parser.add_argument("--all-checkpoints", action="store_true",
@@ -609,7 +620,7 @@ def main() -> None:
         raise RuntimeError("No valid experiments to plot.")
 
     fig = make_plot(experiments, dpi=args.dpi, plot_name=args.plot_name, legend_loc=legend_loc,
-                    fig_width=args.fig_width, y_min=args.y_min)
+                    fig_width=args.fig_width, fig_height=args.fig_height, y_min=args.y_min)
 
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)

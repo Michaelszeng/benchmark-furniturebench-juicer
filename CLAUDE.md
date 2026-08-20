@@ -17,16 +17,18 @@ demonstrations, with trajectory augmentation at bottleneck states.
 
 ```
 src/
-├── behavior/       # Policy classes: Actor base + MLPActor, RNNActor, DiffusionPolicy
 ├── common/         # Shared utilities: files.py, geometry.py, types.py, vision.py, tasks.py
 ├── config/         # Hydra YAML configs: base.yaml + actor/, vision_encoder/, experiment/ groups
 ├── data_collection/ # Teleoperation, scripted collection, backward augmentation
 ├── data_processing/ # Raw pkl -> processed zarr pipeline (process, encode, combine, augment)
-├── dataset/        # FurnitureImageDataset, normalizers, FixedStepsDataloader
 ├── eval/           # evaluate_model.py (WandB run evaluation), rollout.py
 ├── gym/            # get_env() factory wrapping FurnitureSimEnv
-├── models/         # Neural network modules: transformer, unet, vision encoders
-└── train/          # bc.py (main training entry point), continue_bc.py, train_value.py
+└── training/       # Policy training, consolidated:
+    ├── behavior/   #   Policy classes: Actor base + MLPActor, RNNActor, DiffusionPolicy
+    ├── models/     #   Neural network modules: transformer, unet, vision encoders
+    ├── dataset/    #   FurnitureImageDataset, normalizers, FixedStepsDataloader
+    ├── baseline/   #   robomimic_config_util.py, used by RNNActor
+    └── train/      #   bc.py (main training entry point), continue_bc.py, train_value.py
 furniture-bench/    # Git submodule: FurnitureBench environment
 sweeps/             # WandB hyperparameter sweep configs
 slurm/              # SLURM job submission files
@@ -48,7 +50,7 @@ pip install -e .
 
 **Train a policy:**
 ```
-python -m src.train.bc +experiment=image_baseline furniture=one_leg
+python -m src.training.train.bc +experiment=image_baseline furniture=one_leg
 ```
 
 **Evaluate a trained run:**

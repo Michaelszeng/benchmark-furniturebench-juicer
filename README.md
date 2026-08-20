@@ -1,151 +1,16 @@
-# JUICER: Data-Efficient Imitation Learning for Robotic Assembly
+# FurnitureBench: Furniture Assembly Benchmark
 
-## Michael's Notes
+This repo is a fork of the [FurnitureBench](https://github.com/clvrai/furniture-bench) (specifically, a fork of it: [JUICER](https://github.com/ankile/imitation-juicer)).
 
-### Debugging Scripts
-
-To teleop the robot:
-```bash
-python src/data_collection/teleop.py -f "FURNITURE"
-```
-
-To puppeteer the scene (set poses of all parts + robot):
-```bash
-python src/data_collection/puppeteer.py -f "FURNITURE"
-```
-
-### Data Generation
-
-#### Published Datasets
-
-Download data, place into `dataset`: https://drive.google.com/drive/folders/13UqtMLXY1_8JCQOZf3j-YbZyMRTsgZ2K
-
-Truncate each episode so they do not contain data after success is achieved:
-```bash
-python -m src.data_processing.truncate_at_success dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success.zarr --output dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success_truncated.zarr
-```
-
-Convert to Training Format:
-```bash
-python src/data_processing/process_zarr.py dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success_truncated.zarr --output dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success_truncated_translated.zarr
-```
+This fork contains unique features:
+ - Scripted Markovian expert for automated data collection on the `one_leg` task
+ - Scripted Non-Markovian expert for automated data collection on the `one_leg` task
+ - Diffusion Policy evaluation pipeline for policies trained using [diffusion-policy-experiments](https://github.com/Michaelszeng/diffusion-policy-experiments)
+ - Semi-automated Human-Gated-DAgger pipeline (including failure collection, manual intervention timestep annotation, and correction collectino) for iterative training of policies
 
 
-#### Scripted Data
+## Installation
 
-```bash
-./src/data_collection/collect_scripted.sh
-```
-
-#### Dataset Visualization
-```bash
-python scripts/visualize_dataset.py PATH.zarr
-```
-
-
-### Evaluating a `diffusion_policy` Checkpoint
-
-`src/eval/evaluate_model_custom.py` loads a `.ckpt` produced by the `diffusion-policy` repo and runs rollouts in the FurnitureBench sim.
-The following one-time setup is required in the `imitation-juicer` conda environment (Python 3.8 — the `diffusion-policy` pyproject.toml requires ≥3.9, so a plain `pip install -e` is blocked):
-
-```bash
-pip install dill==0.3.5.1
-echo "/home/michzeng/diffusion-policy" \
-    > "$CONDA_PREFIX/lib/python3.8/site-packages/diffusion_policy.pth"
-pip install robomimic --no-deps
-pip install einops==0.4.1
-pip install pandas
-pip install accelerate==0.13.2
-```
-
-After setup, verify with:
-```bash
-python -c "import diffusion_policy; print('OK')"
-```
-
-Then evaluate a checkpoint:
-```bash
-python -m src.eval.evaluate_model_custom \
-    --checkpoint /path/to/checkpoint.ckpt \
-    --furniture FURNITURE \
-    --n-rollouts 10 \
-    --n-envs 1 \
-```
-
-#### Full Action Horizon Ablations
-Replace `N` with the number of parallel environments your hardware can handle:
-```bash
-./src/eval/action_horizon_ablation.sh <PATH-TO-CKPT-DIR> one_leg N
-```
-
-This runs all checkpoints on all action horizons `[1,2,3,4,6,7,8,10,12,15]`, 500 trials for each combination, and logs the results.
-
-
-### Setting up on MIT CSAIL SLURM Cluster
-
-Follow the same installation steps as below, except:
-
-1. Create conda environment:
-```bash
-conda create -n py38 python=3.8 -y
-conda activate py38
-```
-
-2. Since we do not have browser access on the cluster, download Isaac Gym on another device and use `scp`/`rsync` to send it to the cluster.
-
-3. Ensure you follow the **Evaluating a diffusion_policy Checkpoint** instructions above as well.
-
-
-### Semi-Automated DAgger Pipeline
-
-The DAgger pipeline is a three-step process for collecting failures, annotating them, and gathering corrections:
-
-1. **Collect Failures:**
-   Launch parallel jobs to collect policy failures. The final job automatically renders MP4 previews of the failures.
-   ```bash
-   bash scripts/launch_dagger_collect_failures.sh <num_procs> <iter> <action_horizon> <non_markovian>
-   ```
-
-2. **Label Gates:**
-   Watch the generated MP4 previews and label the "gate" (bottleneck) frame for each failure.
-   ```bash
-   python scripts/dagger_label_gates.py <path_to_failure_dir>
-   ```
-
-3. **Collect Corrections:**
-   Launch parallel jobs to collect expert corrections starting from the labeled gates. The final job automatically processes the new data into a `.zarr` dataset.
-   ```bash
-   bash scripts/launch_dagger_collect_corrections.sh <num_procs> <iter> <action_horizon> <non_markovian>
-   ```
-
-#### Robust Re-arrangement Data
-
-IMPORTANT: DO NOT USE ROBUST-REARRANGEMENT DATA. See: https://github.com/ankile/robust-rearrangement/issues/42
-
-~~NOTE: Robust Re-arrangement uses a different parts-poses format that isn't currently trainslated; so it is not safe to train state-based policies using the combined Robust Re-arrangement + imitation-juicer data.~~
-
-~~Download Robust Re-arrangement Data:~~
-```bash
-# One-time:
-pip install boto3
-pip install gymnasium
-python scripts/download_robust_rearrangement_data.py --task one_leg
-python scripts/download_robust_rearrangement_data.py --task lamp
-python scripts/download_robust_rearrangement_data.py --task round_table
-```
-
-~~Post-process the dataset with April Tags visualized (since all data used by this repo has April Tags):~~
-```bash
-python scripts/process_robust_rearrangement_data.py \
-        --input-dir dataset/processed/diffik/sim/one_leg/teleop/low/success.zarr \
-        --output-dir dataset/processed/diffik/sim/one_leg/teleop/low/success_processed.zarr \
-        --furniture "FURNITURE" \
-        --randomness low
-```
-
-
-
-## Installation Instructions
 
 ### Install Conda
 
@@ -299,148 +164,208 @@ sudo systemctl start spacenavd
 ```
 
 
-### Install Additional Dependencies
 
-Depending on what parts of the codebase you want to run, you may need to install additional dependencies. Especially different vision encoders might require additional dependencies. To install the R3M or VIP encoder, respectively, run:
 
+
+## Teleop Data Collection
+
+Note: this repo uses the [Diffusion Policy](https://arxiv.org/abs/2303.04137v4) zarr format for datasets. 
+
+### Published Datasets
+
+The [JUICER](https://imitation-juicer.github.io/) paper provides a dataset of 50 demonstrations. Download data, place into a directory called `./dataset`: https://drive.google.com/drive/folders/13UqtMLXY1_8JCQOZf3j-YbZyMRTsgZ2K
+
+Truncate each episode so they do not contain data after success is achieved:
 ```bash
-# Run from the repository root.
-pip install -e furniture-bench/r3m
-pip install -e furniture-bench/vip
+python src/data_processing/truncate_at_success.py dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success.zarr --output dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success_truncated.zarr
 ```
 
-The Spatial Softmax encoder and BC_RNN policy requires the `robomimic` package to be installed:
-
+Convert to Training `zarr` Format:
 ```bash
-git clone https://github.com/ARISE-Initiative/robomimic.git
-cd robomimic
-pip install -e .
+python src/data_processing/process_zarr.py dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success_truncated.zarr --output dataset/imitation-juicer-data-processed-001/processed/sim/one_leg/teleop/low/success_truncated_translated.zarr
 ```
 
+### Manual Collection
 
-## Download the Data
-
-We provide a Google Drive folder that contains a zip file with the raw data and a zip file with the processed data. [Download the data](https://drive.google.com/drive/folders/13UqtMLXY1_8JCQOZf3j-YbZyMRTsgZ2K?usp=sharing).
-
-The data files can be unzipped by running:
+This requires possession of a Spacemouse, i.e. the 3Dconnexion SpaceMouse Wireless 3DX-700043.
 
 ```bash
-tar -xzvf imitation-juicer-data-raw.tar.gz
-tar -xzvf imitation-juicer-data-processed.tar.gz
+python src/data_collection/teleop.py --furniture one_leg --num-demos 200 --randomness low
 ```
 
-Then, for the code to know where to look for the data, please set the environment variables `DATA_DIR_RAW` and `DATA_DIR_PROCESSED` to the paths of the raw and processed data directories, respectively. This can be done by running or adding the following lines to your shell configuration file (e.g., `~/.bashrc` or `~/.zshrc`):
+To collect data, control the robot with the SpaceMouse. To discard an episode and reset the environment, press `n`. To \"undo\" actions, press `b`. To toggle recording on and off, use `c` and `p`, respectively. Note that the environment automatically resets upon success.
 
-```bash
-export DATA_DIR_RAW=/path/to/raw-data
-export DATA_DIR_PROCESSED=/path/to/processed-data
-```
-
-In the above example the folders contained in the twro zipped files, `raw` and `processed`, should be placed immediately inside the above folder, e.g., `/path/to/raw-data/raw` and `/path/to/processed-data/processed`.
-
-All parts of the code (data collection, training, evaluation rollout storage, data processing, etc.) uise these environment variables to locate the data.
-
-_Note: The code uses the directory structure in the folders to locate the data. If you change the directory structure, you may need to update the code accordingly._
-
-
-
-## Guide to Project Workflow
-
-This README outlines the workflow for collecting demonstrations,
-annotating them, augmenting trajectories, training models, and
-evaluating the trained models. Below are the steps involved in the
-process.
-
-The below instructions assume that the user has set environment variables for the raw data directory (`DATA_DIR_RAW`) and the processed data directory (`DATA_DIR_PROCESSED`). The raw data directory contains the raw demonstration data as one `.pkl` (possibly `.pkl.xz` if compressed, which is handled automatically) file per trajectory, while the processed data directory contain `.zarr` files with the processed data ready for training with multiple trajectories for each dataset. 
-
-### Collect Demonstrations
-
-To collect data, start by invoking the simulated environment. Input
-actions are recorded using the 3DConnextion SpaceMouse. The source code
-and command line arguments are available in
-`src/data_collection/teleop.py`. An example command for collecting
-demonstrations for the `one_leg` task is:
-
-```bash
-python -m src.data_collection.teleop --furniture one_leg --num-demos 10 --randomness low
-```
-
-Optionally you can add the flag `--save-failure` to also store failed trajectories and the flag `--no-ee-laser` will remove the red laser from the end-effector from the viewer (it's not rendered in the camera views either way).
+Optionally add the flag `--save-failure` to also store failed trajectories, and add `--no-ee-laser` to remove the red laser from the end-effector from the viewer (it's not rendered in the camera views either way).
 
 Demonstrations are saved as `.pkl` files at:
 ```bash
-$DATA_DIR_RAW/raw/sim/one_leg/teleop/low/success/
+./dataset/raw/sim/one_leg/teleop/low/success/
 ```
 
-By default, only successful demonstrations are stored. Failures can be
-stored by using the `--save-failure` flag. The `--no-ee-laser` flag
-disables the assistive red light.
-
-To collect data, control the robot with the SpaceMouse. To store an
-episode and reset the environment, press `t`. To discard an episode,
-press `n`. To \"undo\" actions, press `b`. To toggle recording on and
-off, use `c` and `p`, respectively.
-
-### Annotate Demonstrations
-
-Before trajectory augmentation, demos must be annotated at bottleneck
-states. Use `src/data_collection/annotate_demo.py` for this purpose.
-Here\'s how to invoke the tool:
-```bash
-python -m src.data_collection.annotate_demo --furniture one_leg --rest-of-arguments-tbd
-```
-
-Use `k` and `j` to navigate frames, and `l` and `h` for faster
-navigation. Press `space` to mark a frame and `u` to undo a mark. Press
-`s` to save and move to the next trajectory.
-
-### Augment Trajectories
-
-After annotation, use `src/data_collection/backward_augment.py` to
-generate counterfactual snippets. Example command:
+To post-process the `.pkl` files into a `.zarr` dataset:
 
 ```bash
-python -m src.data_collection.backward_augment --furniture one_leg --randomness low --demo-source teleop
+python src/data_processing/process_pickles.py --env sim --furniture one_leg --source teleop --randomness low --demo-outcome success
 ```
 
-Optionally, adding the flag `--no-filter-pickles` will skip the step that filters out only trajectories that have been annotated, which speeds up the process in cases where all trajectories in the directory have been annotated.
-
-New demonstrations are stored at:
+Then, convert to the training `zarr` format (matching the standard diffusion policy zarr format):
 
 ```bash
-$DATA_DIR_RAW/raw/sim/one_leg/augmentation/low/success/
+python src/data_processing/process_zarr.py dataset/processed/sim/one_leg/teleop/low/success.zarr --output dataset/processed/sim/one_leg/teleop/low/success_translated.zarr
 ```
 
-### Train Models
-
-Train models using `src/train/bc.py`. We use Hydra and OmegaConf for
-hyperparameter management. Ensure WandB authentication before starting.
-
-To train for the `one_leg` task:
+For debugging, view the dataset using:
 
 ```bash
-python -m src.train.bc +experiment=image_baseline furniture=one_leg
+python src/visualization/visualize_dataset.py dataset/processed/sim/one_leg/teleop/low/success_translated.zarr
 ```
 
-For a debug run, add `dryrun=true`. For rollouts during training, add
-`rollout=rollout`.
+### Puppeteering (For Debugging)
 
-### Evaluate Models
-
-Evaluate trained models with `src/eval/evaluate_model.py`. For example:
+This related helper script also exists; this is not used for data collection, but can be used to puppeteer/set absolute poses of the robot and of parts in the scene:
 
 ```bash
-python -m src.eval.evaluate_model --run-id entity/project/run-id --furniture one_leg --n-envs 10 --n-rollouts 10 --randomness low
+python src/data_collection/puppeteer.py -f "one_leg"
 ```
 
-Optionally, adding the flag `--save-rollouts` will store the rollout trajectories to the raw data directory and adding `--wandb` will write the success rate numbers back to the WandB run. If using the `--wandb` option, you can optionally filter out only finished runs to evaluate with `--run-state finished` and decide how to deal with runs that have already been evaluated with, e.g., `--if-exists append` (other options are `overwrite` and `skip`).
+
+
+
+
+## Automated Data Collection using Scripted Experts
+
+We provide automated data collection with two kinds of experts: 
+1. Markovian (technically 2-Markovian) expert: implemented as a finite-state machine (FSM) that determines its state using the current and previous environment states.
+2. Non-Markovian Expert: constructed by injecting a variety of non-Markovian behaviors into the deterministic 2-Markovian expert, including a hidden latent plan (consisting of episodically pre-determined waypoint offsets), sticky FSM state transitions (non-deterministically transitioning to the next FSM state), and latent-count alignment maneuvers (noising the trajectory for a fixed amount of time/iterations before picking or inserting the leg). These injections are designed to mimic human behaviors (e.g. pauses, delay in mentally registering subtask completion, sub-optimal or cyclic alignment motions). Other non-Markovian injections are also available but disabled by default.
+
+To run automated data collection, use `src/data_collection/collect_scripted.sh`, which accepts the following positional arguments (all optional):
+
+```bash
+./src/data_collection/collect_scripted.sh [dart_amount] [suffix] [non_markovian] [n_demos]
+```
+
+- `dart_amount` (default `0.0`): scale factor for target/action noise injected by the expert (0.0 = no noise, 1.0 = default noise, 2.0 = double noise). Used to implement noise injection augmentation similar to (https://arxiv.org/abs/2507.09061).
+- `suffix` (default `""`): appended to the `scripted` output directory name (e.g. `v2` → `scripted_v2`), useful for keeping multiple collection runs separate.
+- `non_markovian` (default `False`): if `True`, uses the non-Markovian expert (see above) instead of the Markovian expert.
+- `n_demos` (default `200`): number of successful demos to collect.
+
+After collection finishes, the script automatically post-processes the resulting pickles into zarr format (and applies translation augmentation), guarded by a lock so only one parallel job performs post-processing.
+
+
+
+
+
+
+## Evaluating a Diffusion Policy
+
+This repo contains a policy evaluation pipeline designed for policies trained using [diffusion-policy-experiments](https://github.com/Michaelszeng/diffusion-policy-experiments), but can be easily adapted for other training pipelines.
+
+Note that this repo contains its own imitation-learning training pipeline in `./src/training`, though this is untested and un-integrated with this evaluation pipeline.
+
+The following one-time setup is required for compatibility with [diffusion-policy-experiments](https://github.com/Michaelszeng/diffusion-policy-experiments):
+
+```bash
+pip install dill==0.3.5.1
+echo "/path/to/diffusion-policy-experiments" \
+    > "$CONDA_PREFIX/lib/python3.8/site-packages/diffusion_policy.pth"
+pip install robomimic --no-deps
+pip install einops==0.4.1
+pip install pandas
+pip install accelerate==0.13.2
+```
+
+After setup, verify with:
+```bash
+python -c "import diffusion_policy; print('OK')"
+```
+
+To quickly test a checkpoint:
+```bash
+python -m src.eval.evaluate_model_custom \
+    --checkpoint /path/to/checkpoint.ckpt \
+    --furniture "one_leg" \
+    --n-rollouts 10 \
+    --n-envs 1 \
+```
+
+Use `src/eval/evaluate_checkpoints.sh` for a more thorough evaluation pipeline. This script is a wrapper around `src/eval/evaluate_model_custom.py` that runs rollouts for a single action horizon, for every checkpoint found under a given path (a single `.ckpt` file, or a directory containing multiple `.ckpt` files):
+
+```bash
+./src/eval/evaluate_checkpoints.sh <checkpoint_or_dir> [furniture] <n_action_steps> [n_envs] [n_video_trials] [n_rollouts] [--debug] [--resume] [--task-timeout N]
+```
+
+- `checkpoint_or_dir` (required): path to a single `.ckpt` file, or a directory containing one or more `.ckpt` files (all files except `latest.ckpt` are evaluated).
+- `furniture` (default `one_leg`): furniture task to evaluate on.
+- `n_action_steps` (required): action horizon (number of actions executed per policy inference) to evaluate with.
+- `n_envs` (default `1`): number of parallel simulation environments to run rollouts in.
+- `n_video_trials` (default `0`): the first `n_video_trials` trials will be recorded as MP4 files (set to `-1` to save all).
+- `n_rollouts` (default `500`): total number of rollouts to run.
+- `--debug` (optional flag): overrides the above to `n_envs=1 n_rollouts=1 n_video_trials=0` and disables headless mode, for fast iteration with a visible sim window.
+- `--resume` (optional flag): skips checkpoints that already have results in their output directory, so an interrupted run can be continued.
+- `--task-timeout N` (optional): overrides the max number of steps per rollout (default comes from the sim config).
+
+
+Results for each checkpoint are written to `outputs/<experiment_name>/T_a_<n_action_steps>/<checkpoint_stem>/`, where `<experiment_name>` is derived from the directory name that precedes `checkpoints/` in the given checkpoint path.
+
+Note: there are various scripts in `./plotting_scripts` that may be helpful for processing the evaluation results.
+
+
+
+
+
+
+## Semi-Automated HG-DAgger Pipeline
+
+HG-DAgger (Human-Gated DAgger) is an interactive imitation learning method where a human supervisor monitors a trained policy's rollouts, intervenes right before it starts to fail, and provides corrective demonstrations from that point onward. 
+
+This section implements a semi-automated version of that loop: the HG-DAgger pipeline is a three-step process for collecting failures, annotating them, and gathering corrections:
+
+1. **Collect Failures:**
+   Launch parallel jobs to collect policy failures. The final job automatically renders MP4 previews of the failures.
+   ```bash
+   bash scripts/launch_dagger_collect_failures.sh <num_parallel_processes> <dagger_iter> <action_horizon> <non_markovian>
+   ```
+
+2. **Label Gates:**
+   Watch the generated MP4 previews and label the "gate" frame for each failure. The gate frame should be the first timestep where the policy deviates from a nominal trajectory in a way that ultimately leads to task failure.
+   ```bash
+   python src/dagger/dagger_label_gates.py <path_to_failure_dir>
+   ```
+   The labeler appends each gate as an extra xz stream onto the `.pkl.xz` file, and uses the heuristic `pkl.mtime > preview.mtime` to detect which failures are still unlabeled. To relabel a failure (e.g. after making a mistake), strip its appended gate stream back off with:
+   ```bash
+   python src/dagger/dagger_unlabel_gates.py <path_to_failure_dir> [--dry-run]
+   ```
+   This truncates the `.pkl.xz` back to just the original pickle and bumps the matching `.preview.mp4`'s mtime so `dagger_label_gates.py` re-classifies it as unlabeled on the next run. Use `--dry-run` to preview what would be stripped without modifying any files.
+
+3. **Collect Corrections:**
+   Launch parallel jobs to collect expert corrections starting from the labeled gates. The final job automatically processes the new data into a `.zarr` dataset.
+   ```bash
+   bash scripts/launch_dagger_collect_corrections.sh <num_parallel_processes> <dagger_iter> <action_horizon> <non_markovian>
+   ```
+
+The outputted corrections `.zarr` should then be included in the next training run to fine-tune the policy on the HG-DAgger corrections. Repeat this process for multiple iterations to steadily improve the policy.
+
+Note that this pipeline is currently designed for use on a SLURM cluster, but may be adapted for other use.
+
 
 
 
 
 ## Citation
 
-If you find the paper or the code useful, please consider citing the paper:
+If you find the paper or the code useful, please consider citing:
+
+```tex      
+@misc{zeng2026revisitingopenloopexecutionrobotics,
+      title={Revisiting Open-Loop Execution in Robotics: Toward Reactive, Higher-Performing Policies}, 
+      author={Michael Zeng and Abhinav Agarwal and Ajay Bati and Brian Lee and Siddharth Ancha and Russ Tedrake},
+      year={2026},
+      eprint={2608.15938},
+      archivePrefix={arXiv},
+      primaryClass={cs.RO},
+      url={https://arxiv.org/abs/2608.15938}, 
+}
+```
 
 ```tex      
 @misc{ankile2024juicer,
@@ -452,6 +377,3 @@ If you find the paper or the code useful, please consider citing the paper:
       primaryClass={cs.RO}
 }
 ```
-
-
-<p><small>Project based on the <a target="_blank" href="https://drivendata.github.io/cookiecutter-data-science/">cookiecutter data science project template</a>. #cookiecutterdatascience</small></p>

@@ -1,21 +1,13 @@
-FURNITURE="one_leg"
-N_DEMOS=100
+FURNITURE="one_leg"  # only one_leg is currently supported
 
 # $1: dart_amount
 # $2: suffix
-# $3: chunk_size (scripted_dart only, default 16)
-# $4: non_markovian (True/False)
-# $5: use_dart (True/False) — selects which collection
-# + post-processing scripts to run, independent of DART_AMOUNT.
+# $3: non_markovian (True/False)
+# $4: n_demos (default 100)
 DART_AMOUNT=${1:-0.0}
 SUFFIX=${2:-""}
-
-# The chunk size should be equal to (or greater than) your diffusion policy's prediction horizon; it consists of the clean
-# future actions that the diffusion policy should learn to predict 
-# Default value of 16 corresponds to a policy that predicts up to 16 actions into the future
-CHUNK_SIZE=${3:-16}
-NON_MARKOVIAN=${4:-"False"}
-USE_DART=${5:-"False"}
+NON_MARKOVIAN=${3:-"False"}
+N_DEMOS=${4:-200}
 
 N_ENVS=4
 
@@ -27,7 +19,6 @@ echo "DART_AMOUNT: ${DART_AMOUNT}"
 echo "SUFFIX: ${SUFFIX}"
 echo "N_ENVS: ${N_ENVS}"
 echo "NON_MARKOVIAN: ${NON_MARKOVIAN}"
-echo "USE_DART: ${USE_DART}"
 
 # `stdbuf -oL -eL` line-buffers stdout/stderr of the child process and `python -u`
 # disables Python's own output buffering. Together, these ensure that any
@@ -45,25 +36,13 @@ if [ "${NON_MARKOVIAN}" = "True" ]; then
     fi
 fi
 
-# Route to scripted_dart.py vs scripted.py based on the hard-coded USE_DART flag
-# (independent of DART_AMOUNT — set explicitly by the caller).
 DEMO_SOURCE="scripted$( [ -n "${SUFFIX}" ] && echo "_${SUFFIX}" )"
 
-if [ "${USE_DART}" = "True" ]; then
-    echo "CHUNK_SIZE: ${CHUNK_SIZE}"
-    # Use 1 env if using scripted_dart -- scripted_dart only supports 1 env
-    ${PY} -m src.data_collection.scripted_dart \
-        -f ${FURNITURE} -n ${N_DEMOS} -e 1 \
-        --chunk-size ${CHUNK_SIZE} --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG} \
-        $( [ -n "${SUFFIX}" ] && echo "--output-dir-suffix ${SUFFIX}" ) \
-        --headless
-else
-    ${PY} src/data_collection/scripted.py \
-        -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} \
-        --n-video-trials 20 --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG} \
-        $( [ -n "${SUFFIX}" ] && echo "--output-dir-suffix ${SUFFIX}" ) \
-        --headless
-fi
+${PY} src/data_collection/scripted.py \
+    -f ${FURNITURE} -n ${N_DEMOS} -e ${N_ENVS} \
+    --n-video-trials 20 --dart-amount ${DART_AMOUNT} ${NON_MARKOVIAN_FLAG} \
+    $( [ -n "${SUFFIX}" ] && echo "--output-dir-suffix ${SUFFIX}" ) \
+    --headless
 
 # Post-processing: convert pickles → zarr → translated zarr.
 # Multiple instances of this script may run in parallel (separate SLURM jobs),
@@ -73,9 +52,7 @@ fi
 #
 # If post-processing crashes and leaves a stale lock, delete the lock dir:
 #   rm -rf "${LOCK_DIR}"
-PROCESS_PICKLES=$( [ "${USE_DART}" = "True" ] \
-    && echo "src/data_processing/process_pickles_dart.py" \
-    || echo "src/data_processing/process_pickles.py" )
+PROCESS_PICKLES="src/data_processing/process_pickles.py"
 
 RAW_SUCCESS_DIR="dataset/raw/sim/${FURNITURE}/${DEMO_SOURCE}/low/success"
 DONE_FILE="${RAW_SUCCESS_DIR}/.post_process_done"

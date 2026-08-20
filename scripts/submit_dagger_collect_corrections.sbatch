@@ -50,14 +50,21 @@ echo "DEBUG_FULL_ROLLOUT=$DEBUG_FULL_ROLLOUT  SAVE_FAILED_ATTEMPTS=$SAVE_FAILED_
 
 # --- Environment setup ---
 cd "$SLURM_SUBMIT_DIR" || { echo "cd failed"; exit 1; }
-source /data/locomotion/michzeng/miniconda3/etc/profile.d/conda.sh
-conda activate py38
+
+# Root directory containing this user's miniconda/mamba installs on the cluster.
+# Defaults to the submitting shell's $HOME; override by exporting CLUSTER_USER_HOME
+# before submitting if your cluster's compute nodes don't share your login $HOME, e.g.:
+#   CLUSTER_USER_HOME=/data/locomotion/$USER sbatch ...
+CLUSTER_USER_HOME="${CLUSTER_USER_HOME:-$HOME}"
+
+source "${CLUSTER_USER_HOME}/miniconda3/etc/profile.d/conda.sh"
+conda activate imitation-juicer
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${SLURM_STEP_GPUS:-${SLURM_JOB_GPUS:-0}}}"
 mkdir -p logs
 export PYTHONPATH=$PWD:$PYTHONPATH
 export PHYSX_MAX_GPU_CONTACT_PAIRS=$((1024 * 1024 * 32))
-export HOME=/data/locomotion/michzeng
-export LD_LIBRARY_PATH=/data/locomotion/michzeng/mamba/envs/py38/lib:${LD_LIBRARY_PATH:-}
+export HOME="${CLUSTER_USER_HOME}"
+export LD_LIBRARY_PATH="${CLUSTER_USER_HOME}/mamba/envs/imitation-juicer/lib:${LD_LIBRARY_PATH:-}"
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export VK_INSTANCE_LAYERS=
 ulimit -c unlimited
@@ -77,7 +84,7 @@ if [ ! -d "$FAILURE_DIR" ]; then
 fi
 
 echo "==== [1/2] dagger_collect_corrections.py (slice ${INSTANCE_IDX}/${TOTAL_INSTANCES}) ===="
-python scripts/dagger_collect_corrections.py \
+python src/dagger/dagger_collect_corrections.py \
     --furniture "$FURNITURE" \
     --iter "$ITER" \
     --action-horizon "$ACTION_HORIZON" \

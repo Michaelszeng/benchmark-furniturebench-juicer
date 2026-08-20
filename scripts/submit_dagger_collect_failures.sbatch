@@ -110,14 +110,21 @@ echo "FURNITURE=$FURNITURE  NUM_FAILURES=$NUM_FAILURES  DART_AMOUNT=$DART_AMOUNT
 
 # --- Environment setup ---
 cd "$SLURM_SUBMIT_DIR" || { echo "cd failed"; exit 1; }
-source /data/locomotion/michzeng/miniconda3/etc/profile.d/conda.sh
-conda activate py38
+
+# Root directory containing this user's miniconda/mamba installs on the cluster.
+# Defaults to the submitting shell's $HOME; override by exporting CLUSTER_USER_HOME
+# before submitting if your cluster's compute nodes don't share your login $HOME, e.g.:
+#   CLUSTER_USER_HOME=/data/locomotion/$USER sbatch ...
+CLUSTER_USER_HOME="${CLUSTER_USER_HOME:-$HOME}"
+
+source "${CLUSTER_USER_HOME}/miniconda3/etc/profile.d/conda.sh"
+conda activate imitation-juicer
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${SLURM_STEP_GPUS:-${SLURM_JOB_GPUS:-0}}}"
 mkdir -p logs
 export PYTHONPATH=$PWD:$PYTHONPATH
 export PHYSX_MAX_GPU_CONTACT_PAIRS=$((1024 * 1024 * 32))
-export HOME=/data/locomotion/michzeng
-export LD_LIBRARY_PATH=/data/locomotion/michzeng/mamba/envs/py38/lib:${LD_LIBRARY_PATH:-}
+export HOME="${CLUSTER_USER_HOME}"
+export LD_LIBRARY_PATH="${CLUSTER_USER_HOME}/mamba/envs/imitation-juicer/lib:${LD_LIBRARY_PATH:-}"
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export VK_INSTANCE_LAYERS=
 ulimit -c unlimited
@@ -131,7 +138,7 @@ NM_TAG=$([[ "${NON_MARKOVIAN,,}" == "true" || "${NON_MARKOVIAN}" == "1" || "${NO
 FAILURE_DIR="dataset/raw/sim/${FURNITURE}/dagger_iter${ITER}_ah${ACTION_HORIZON}_${NM_TAG}/low/failure"
 
 echo "==== [1/2] dagger_collect_failures.py ===="
-python scripts/dagger_collect_failures.py \
+python src/dagger/dagger_collect_failures.py \
     --checkpoint "$CHECKPOINT" \
     --furniture "$FURNITURE" \
     --iter "$ITER" \
@@ -155,7 +162,7 @@ echo "barrier: ${N_DONE}/${TOTAL_INSTANCES} instances finished"
 
 if [ "$N_DONE" -ge "$TOTAL_INSTANCES" ] && mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "==== [2/2] dagger_render_failures.py (last instance, lock acquired) ===="
-    python scripts/dagger_render_failures.py "$FAILURE_DIR"
+    python src/dagger/dagger_render_failures.py "$FAILURE_DIR"
     rm -rf "$DONE_DIR" "$LOCK_DIR"
     echo "done. Next: label gates, then submit submit_dagger_collect_corrections.sbatch."
 else

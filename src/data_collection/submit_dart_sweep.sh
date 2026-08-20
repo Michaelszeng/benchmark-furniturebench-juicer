@@ -3,10 +3,6 @@
 
 NON_MARKOVIAN="False"
 
-# Hard-coded flag that selects scripted_dart.py + process_pickles_dart.py when "True",
-# scripted.py + process_pickles.py when "False".  Independent of DART_AMOUNT.
-USE_DART="False"
-
 declare -A DART_SUFFIXES=(
     ["0.0"]="0"
     ["0.03125"]="0_03125"
@@ -18,9 +14,9 @@ declare -A DART_SUFFIXES=(
 
 for DART_AMOUNT in "${!DART_SUFFIXES[@]}"; do
     SUFFIX="${DART_SUFFIXES[$DART_AMOUNT]}"
-    echo "Submitting dart_amount=${DART_AMOUNT} (suffix=${SUFFIX}) non_markovian=${NON_MARKOVIAN} use_dart=${USE_DART}"
+    echo "Submitting dart_amount=${DART_AMOUNT} (suffix=${SUFFIX}) non_markovian=${NON_MARKOVIAN}"
     sbatch src/data_collection/submit_collect_scripted.sbatch \
-        "${DART_AMOUNT}" "${SUFFIX}" "" "${NON_MARKOVIAN}" "${USE_DART}"
+        "${DART_AMOUNT}" "${SUFFIX}" "${NON_MARKOVIAN}"
 done
 
 # Usage:

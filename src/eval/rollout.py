@@ -11,7 +11,7 @@ from furniture_bench.envs.furniture_sim_env import FurnitureSimEnv
 
 from typing import Union
 
-from src.behavior.base import Actor
+from src.training.behavior.base import Actor
 from src.visualization.render_mp4 import create_in_memory_mp4
 from src.common.context import suppress_all_output
 from src.common.tasks import furniture2idx

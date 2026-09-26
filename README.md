@@ -95,18 +95,12 @@ You can now safely delete the downloaded zipped file and navigate back to the ro
 
 ### Install FurnitureBench
 
-To allow for data collection with the SpaceMouse, etc. we used a custom fork (link omitted for anonymous review) of the [FurnitureBench code](https://github.com/clvrai/furniture-bench). The fork is included in this codebase as a submodule. To install the FurnitureBench package, first run:
+To allow for data collection with the SpaceMouse, etc. we used a custom fork of the [FurnitureBench code](https://github.com/clvrai/furniture-bench). For double-blind review, this fork is provided as a separate anonymized repository rather than as a git submodule (submodule URLs cannot be anonymized without breaking them): **<ANONYMOUS_FURNITURE_BENCH_LINK>**.
+
+Clone that fork and place it at `furniture-bench/` in the root of this repo, then install the FurnitureBench package by running:
 
 ```bash
-git clone --recursive git@github.com:ankile/imitation-juicer.git
-```
-
-_Note: If you forgot to clone the submodule, you can run `git submodule update --init --recursive` to fetch the submodule._
-
-Then, install the FurnitureBench package by running:
-
-```bash
-cd imitation-juicer/furniture-bench
+cd furniture-bench
 pip install -e .
 ```
 

@@ -95,7 +95,7 @@ You can now safely delete the downloaded zipped file and navigate back to the ro
 
 ### Install FurnitureBench
 
-To allow for data collection with the SpaceMouse, etc. we used a custom fork of the [FurnitureBench code](https://github.com/clvrai/furniture-bench). For double-blind review, this fork is provided as a separate anonymized repository rather than as a git submodule (submodule URLs cannot be anonymized without breaking them): **[anonymous.4open.science/r/furniture-bench](https://anonymous.4open.science/r/furniture-bench/README.md)**.
+This codebase depends on a custom fork of the [FurnitureBench code](https://github.com/clvrai/furniture-bench), which contains core code for the scripted experts in addition to data collection support (e.g. SpaceMouse teleop). For double-blind review, this fork is provided as a separate anonymized repository rather than as a git submodule (submodule URLs cannot be anonymized without breaking them): **[anonymous.4open.science/r/furniture-bench](https://anonymous.4open.science/r/furniture-bench/README.md)**.
 
 Clone that fork and place it at `furniture-bench/` in the root of this repo, then install the FurnitureBench package by running:
 

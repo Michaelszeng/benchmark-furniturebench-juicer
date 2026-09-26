@@ -340,22 +340,3 @@ This section implements a semi-automated version of that loop: the HG-DAgger pip
 The outputted corrections `.zarr` should then be included in the next training run to fine-tune the policy on the HG-DAgger corrections. Repeat this process for multiple iterations to steadily improve the policy.
 
 Note that this pipeline is currently designed for use on a SLURM cluster, but may be adapted for other use.
-
-
-
-
-
-## Citation
-
-If you find the paper or the code useful, please consider citing:
-
-```tex      
-@misc{ankile2024juicer,
-      title={JUICER: Data-Efficient Imitation Learning for Robotic Assembly}, 
-      author={Lars Ankile and Anthony Simeonov and Idan Shenfeld and Pulkit Agrawal},
-      year={2024},
-      eprint={2404.03729},
-      archivePrefix={arXiv},
-      primaryClass={cs.RO}
-}
-```

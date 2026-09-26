@@ -356,15 +356,6 @@ Note that this pipeline is currently designed for use on a SLURM cluster, but ma
 If you find the paper or the code useful, please consider citing:
 
 ```tex      
-@misc{anonymous2026revisitingopenloopexecutionrobotics,
-      title={Revisiting Open-Loop Execution in Robotics: Toward Reactive, Higher-Performing Policies}, 
-      author={Anonymous Authors},
-      year={2026},
-      note={Under double-blind review},
-}
-```
-
-```tex      
 @misc{ankile2024juicer,
       title={JUICER: Data-Efficient Imitation Learning for Robotic Assembly}, 
       author={Lars Ankile and Anthony Simeonov and Idan Shenfeld and Pulkit Agrawal},

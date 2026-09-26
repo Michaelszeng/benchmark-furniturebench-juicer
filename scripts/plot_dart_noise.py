@@ -9,10 +9,10 @@ import numpy as np
 from matplotlib.lines import Line2D
 
 FILES = {
-    "0.03125": "/home/michzeng/Downloads/0_03125.pkl.xz",
-    "0.0625": "/home/michzeng/Downloads/0.0625.pkl.xz",
-    "0.125": "/home/michzeng/Downloads/0_125.pkl.xz",
-    "0.25": "/home/michzeng/Downloads/0_25.pkl.xz",
+    "0.03125": "/path/to/workspace/downloads/0_03125.pkl.xz",
+    "0.0625": "/path/to/workspace/downloads/0.0625.pkl.xz",
+    "0.125": "/path/to/workspace/downloads/0_125.pkl.xz",
+    "0.25": "/path/to/workspace/downloads/0_25.pkl.xz",
 }
 
 COLORS = {"0.03125": "tab:blue", "0.0625": "tab:orange", "0.125": "tab:red", "0.25": "tab:green"}
@@ -24,7 +24,7 @@ PLOT_JOINTS = True
 PLOT_GRIPPER_ACTIONS = False
 
 SAVE_FIG = False
-SAVE_PATH = "/home/michzeng/Downloads/dart_noise_comparison.png"
+SAVE_PATH = "/path/to/workspace/downloads/dart_noise_comparison.png"
 
 
 def load(path):

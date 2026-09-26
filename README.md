@@ -5,7 +5,7 @@ This repo is a fork of the [FurnitureBench](https://github.com/clvrai/furniture-
 This fork contains unique features:
  - Scripted Markovian expert for automated data collection on the `one_leg` task
  - Scripted Non-Markovian expert for automated data collection on the `one_leg` task
- - Diffusion Policy evaluation pipeline for policies trained using [diffusion-policy-experiments](https://github.com/Michaelszeng/diffusion-policy-experiments)
+ - Diffusion Policy evaluation pipeline for policies trained using our companion diffusion-policy-experiments repo (link omitted for anonymous review)
  - Semi-automated Human-Gated-DAgger pipeline (including failure collection, manual intervention timestep annotation, and correction collectino) for iterative training of policies
 
 
@@ -95,7 +95,7 @@ You can now safely delete the downloaded zipped file and navigate back to the ro
 
 ### Install FurnitureBench
 
-To allow for data collection with the SpaceMouse, etc. we used a [custom fork](https://github.com/Michaelszeng/furniture-bench/tree/iros-2024-release-v1) of the [FurnitureBench code](https://github.com/clvrai/furniture-bench). The fork is included in this codebase as a submodule. To install the FurnitureBench package, first run:
+To allow for data collection with the SpaceMouse, etc. we used a custom fork (link omitted for anonymous review) of the [FurnitureBench code](https://github.com/clvrai/furniture-bench). The fork is included in this codebase as a submodule. To install the FurnitureBench package, first run:
 
 ```bash
 git clone --recursive git@github.com:ankile/imitation-juicer.git
@@ -258,11 +258,11 @@ After collection finishes, the script automatically post-processes the resulting
 
 ## Evaluating a Diffusion Policy
 
-This repo contains a policy evaluation pipeline designed for policies trained using [diffusion-policy-experiments](https://github.com/Michaelszeng/diffusion-policy-experiments), but can be easily adapted for other training pipelines.
+This repo contains a policy evaluation pipeline designed for policies trained using our companion diffusion-policy-experiments repo (link omitted for anonymous review), but can be easily adapted for other training pipelines.
 
 Note that this repo contains its own imitation-learning training pipeline in `./src/training`, though this is untested and un-integrated with this evaluation pipeline.
 
-The following one-time setup is required for compatibility with [diffusion-policy-experiments](https://github.com/Michaelszeng/diffusion-policy-experiments):
+The following one-time setup is required for compatibility with our companion diffusion-policy-experiments repo (link omitted for anonymous review):
 
 ```bash
 pip install dill==0.3.5.1
@@ -356,14 +356,11 @@ Note that this pipeline is currently designed for use on a SLURM cluster, but ma
 If you find the paper or the code useful, please consider citing:
 
 ```tex      
-@misc{zeng2026revisitingopenloopexecutionrobotics,
+@misc{anonymous2026revisitingopenloopexecutionrobotics,
       title={Revisiting Open-Loop Execution in Robotics: Toward Reactive, Higher-Performing Policies}, 
-      author={Michael Zeng and Abhinav Agarwal and Ajay Bati and Brian Lee and Siddharth Ancha and Russ Tedrake},
+      author={Anonymous Authors},
       year={2026},
-      eprint={2608.15938},
-      archivePrefix={arXiv},
-      primaryClass={cs.RO},
-      url={https://arxiv.org/abs/2608.15938}, 
+      note={Under double-blind review},
 }
 ```
 

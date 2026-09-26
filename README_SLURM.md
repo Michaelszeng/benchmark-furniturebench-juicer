@@ -12,7 +12,7 @@ Each pipeline below has a `.sbatch` counterpart to the corresponding shell/Pytho
 The conda/`HOME`/`LD_LIBRARY_PATH` setup in each `.sbatch` file assumes your miniconda and mamba installs live under a single root directory, `$CLUSTER_USER_HOME` (defaulting to the submitting shell's `$HOME`). If your cluster's compute nodes don't share your login `$HOME` (e.g. it's on a different, non-mounted filesystem), override it when submitting instead of editing the scripts, e.g.:
 
 ```bash
-CLUSTER_USER_HOME=/data/locomotion/michzeng sbatch src/data_collection/submit_collect_scripted.sbatch
+CLUSTER_USER_HOME=/path/to/workspace sbatch src/data_collection/submit_collect_scripted.sbatch
 ```
 
 ### Automated Data Collection using Scripted Experts

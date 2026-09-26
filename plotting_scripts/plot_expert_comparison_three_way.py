@@ -36,13 +36,13 @@ Human vs Non-Markovian vs Markovian Expert (single path per panel):
 Context Length Ablation on 3 tasks:
 
    python src/eval/plot_expert_comparison_three_way.py \
-       --left-path /data/locomotion/michzeng/push_t_results/2_obs_32_horizon_idle_frames_pruned_v2_clean /data/locomotion/michzeng/push_t_results/6_obs_32_horizon_idle_frames_pruned_v2_clean /data/locomotion/michzeng/push_t_results/10_obs_32_horizon_idle_frames_pruned_v2_clean /data/locomotion/michzeng/push_t_results/14_obs_32_horizon_idle_frames_pruned_v2_clean /data/locomotion/michzeng/push_t_results/18_obs_32_horizon_idle_frames_pruned_v2_clean \
+       --left-path /path/to/workspace/push_t_results/2_obs_32_horizon_idle_frames_pruned_v2_clean /path/to/workspace/push_t_results/6_obs_32_horizon_idle_frames_pruned_v2_clean /path/to/workspace/push_t_results/10_obs_32_horizon_idle_frames_pruned_v2_clean /path/to/workspace/push_t_results/14_obs_32_horizon_idle_frames_pruned_v2_clean /path/to/workspace/push_t_results/18_obs_32_horizon_idle_frames_pruned_v2_clean \
        --left-name '$T_o=2$' '$T_o=6$' '$T_o=10$' '$T_o=14$' '$T_o=18$' \
        --left-panel-title "Push-T" \
-       --middle-path /data/locomotion/michzeng/IsaacLab/outputs/v1_resets/2_obs_gear_assembly_human_expert_attention_double_enc /data/locomotion/michzeng/IsaacLab/outputs/v1_resets/4_obs_gear_assembly_human_expert_attention_double_enc /data/locomotion/michzeng/IsaacLab/outputs/v1_resets/6_obs_gear_assembly_human_expert_attention_double_enc /data/locomotion/michzeng/IsaacLab/outputs/v1_resets/8_obs_gear_assembly_human_expert_attention_double_enc \
+       --middle-path /path/to/workspace/IsaacLab/outputs/v1_resets/2_obs_gear_assembly_human_expert_attention_double_enc /path/to/workspace/IsaacLab/outputs/v1_resets/4_obs_gear_assembly_human_expert_attention_double_enc /path/to/workspace/IsaacLab/outputs/v1_resets/6_obs_gear_assembly_human_expert_attention_double_enc /path/to/workspace/IsaacLab/outputs/v1_resets/8_obs_gear_assembly_human_expert_attention_double_enc \
        --middle-name '$T_o=2$' '$T_o=4$' '$T_o=6$' '$T_o=8$' \
        --middle-panel-title "Gear Assembly" \
-       --right-path /data/locomotion/michzeng/relay-policy-learning/outputs/2_obs_human_expert_attention_double_enc /data/locomotion/michzeng/relay-policy-learning/outputs/4_obs_human_expert_attention_double_enc /data/locomotion/michzeng/relay-policy-learning/outputs/6_obs_human_expert_attention_double_enc /data/locomotion/michzeng/relay-policy-learning/outputs/8_obs_human_expert_attention_double_enc \
+       --right-path /path/to/workspace/relay-policy-learning/outputs/2_obs_human_expert_attention_double_enc /path/to/workspace/relay-policy-learning/outputs/4_obs_human_expert_attention_double_enc /path/to/workspace/relay-policy-learning/outputs/6_obs_human_expert_attention_double_enc /path/to/workspace/relay-policy-learning/outputs/8_obs_human_expert_attention_double_enc \
        --right-name '$T_o=2$' '$T_o=4$' '$T_o=6$' '$T_o=8$' \
        --right-panel-title "Kitchen" \
        --right-horizons 1 10 \
@@ -52,13 +52,13 @@ Context Length Ablation on 3 tasks:
        --output outputs/plots/figure_3_tasks_context_length_ablation_v2.png
 
     python src/eval/plot_expert_comparison_three_way.py \
-       --left-path /data/locomotion/michzeng/push_t_results/2_obs_32_horizon_idle_frames_pruned_v2_clean /data/locomotion/michzeng/push_t_results/6_obs_32_horizon_idle_frames_pruned_v2_clean /data/locomotion/michzeng/push_t_results/10_obs_32_horizon_idle_frames_pruned_v2_clean /data/locomotion/michzeng/push_t_results/14_obs_32_horizon_idle_frames_pruned_v2_clean /data/locomotion/michzeng/push_t_results/18_obs_32_horizon_idle_frames_pruned_v2_clean \
+       --left-path /path/to/workspace/push_t_results/2_obs_32_horizon_idle_frames_pruned_v2_clean /path/to/workspace/push_t_results/6_obs_32_horizon_idle_frames_pruned_v2_clean /path/to/workspace/push_t_results/10_obs_32_horizon_idle_frames_pruned_v2_clean /path/to/workspace/push_t_results/14_obs_32_horizon_idle_frames_pruned_v2_clean /path/to/workspace/push_t_results/18_obs_32_horizon_idle_frames_pruned_v2_clean \
        --left-name '$T_o=2$' '$T_o=6$' '$T_o=10$' '$T_o=14$' '$T_o=18$' \
        --left-panel-title "Push-T" \
-       --middle-path /data/locomotion/michzeng/IsaacLab/outputs/v1_resets/2_obs_gear_assembly_human_expert_attention_double_enc /data/locomotion/michzeng/IsaacLab/outputs/v1_resets/4_obs_gear_assembly_human_expert_attention_double_enc /data/locomotion/michzeng/IsaacLab/outputs/v1_resets/6_obs_gear_assembly_human_expert_attention_double_enc /data/locomotion/michzeng/IsaacLab/outputs/v1_resets/8_obs_gear_assembly_human_expert_attention_double_enc \
+       --middle-path /path/to/workspace/IsaacLab/outputs/v1_resets/2_obs_gear_assembly_human_expert_attention_double_enc /path/to/workspace/IsaacLab/outputs/v1_resets/4_obs_gear_assembly_human_expert_attention_double_enc /path/to/workspace/IsaacLab/outputs/v1_resets/6_obs_gear_assembly_human_expert_attention_double_enc /path/to/workspace/IsaacLab/outputs/v1_resets/8_obs_gear_assembly_human_expert_attention_double_enc \
        --middle-name '$T_o=2$' '$T_o=4$' '$T_o=6$' '$T_o=8$' \
        --middle-panel-title "Gear Assembly" \
-       --right-path /data/locomotion/michzeng/relay-policy-learning/outputs/2_obs_human_expert /data/locomotion/michzeng/relay-policy-learning/outputs/3_obs_human_expert /data/locomotion/michzeng/relay-policy-learning/outputs/4_obs_human_expert /data/locomotion/michzeng/relay-policy-learning/outputs/5_obs_human_expert /data/locomotion/michzeng/relay-policy-learning/outputs/6_obs_human_expert \
+       --right-path /path/to/workspace/relay-policy-learning/outputs/2_obs_human_expert /path/to/workspace/relay-policy-learning/outputs/3_obs_human_expert /path/to/workspace/relay-policy-learning/outputs/4_obs_human_expert /path/to/workspace/relay-policy-learning/outputs/5_obs_human_expert /path/to/workspace/relay-policy-learning/outputs/6_obs_human_expert \
        --right-name '$T_o=2$' '$T_o=3$' '$T_o=4$' '$T_o=5$' '$T_o=6$' \
        --right-panel-title "Kitchen" \
        --right-horizons 1 10 \

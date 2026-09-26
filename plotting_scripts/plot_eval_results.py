@@ -54,7 +54,7 @@ Multiple experiments with custom legend labels:
     --output outputs/plots/1_obs_test.png
 
     python src/eval/plot_eval_results.py \
-    --experiment-path /data/locomotion/michzeng/ManiSkill/outputs/2_obs_human_expert_attention_double_enc /data/locomotion/michzeng/ManiSkill/outputs/4_obs_human_expert_attention_double_enc /data/locomotion/michzeng/ManiSkill/outputs/8_obs_human_expert_attention_double_enc /data/locomotion/michzeng/ManiSkill/outputs/12_obs_human_expert_attention_double_enc /data/locomotion/michzeng/ManiSkill/outputs/16_obs_human_expert_attention_double_enc /data/locomotion/michzeng/ManiSkill/outputs/20_obs_human_expert_attention_double_enc \
+    --experiment-path /path/to/workspace/ManiSkill/outputs/2_obs_human_expert_attention_double_enc /path/to/workspace/ManiSkill/outputs/4_obs_human_expert_attention_double_enc /path/to/workspace/ManiSkill/outputs/8_obs_human_expert_attention_double_enc /path/to/workspace/ManiSkill/outputs/12_obs_human_expert_attention_double_enc /path/to/workspace/ManiSkill/outputs/16_obs_human_expert_attention_double_enc /path/to/workspace/ManiSkill/outputs/20_obs_human_expert_attention_double_enc \
     --experiment-name '$T_o=2$' '$T_o=4$' '$T_o=8$' '$T_o=12$' '$T_o=16$' '$T_o=20$' \
     --legend-loc upper-right \
     --fig-width 3.2 \
